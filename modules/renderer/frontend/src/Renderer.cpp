@@ -163,14 +163,16 @@ void Renderer::bindMaterial(const MaterialInstance &mat,
         upload(name, value);
     }
 
-    // Bind textures.
+    // Bind textures — auto-assign slots in iteration order.
+    core::Sampler slot = 0;
     for (const auto &[name, texHandle] : mat.getTextures()) {
         auto texIt = m_textures.find(texHandle);
         if (texIt == m_textures.end()) continue;
 
         if (auto it = uniforms.find(name); it != uniforms.end()) {
-            const Sampler slot = std::get<Sampler>(mat.values().at(name));
             texIt->second->bind(slot);
+            m_backend.setUniform(it->second.location, slot);
+            ++slot;
         }
     }
 }
