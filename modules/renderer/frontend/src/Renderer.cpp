@@ -1,7 +1,29 @@
 #include <sonnet/renderer/frontend/Renderer.h>
 
 #include <glm/glm.hpp>
+#include <stdexcept>
 #include <string>
+
+namespace {
+
+// Non-owning ITexture wrapper used to expose render target color attachments
+// as GPUTextureHandles without transferring ownership.
+class BorrowedTexture final : public sonnet::api::render::ITexture {
+public:
+    explicit BorrowedTexture(const sonnet::api::render::ITexture *t) : m_inner(t) {}
+
+    void bind(std::uint8_t slot)   const override { m_inner->bind(slot); }
+    void unbind(std::uint8_t slot) const override { m_inner->unbind(slot); }
+
+    [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return m_inner->textureDesc(); }
+    [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return m_inner->samplerDesc(); }
+    [[nodiscard]] unsigned getNativeHandle() const override { return m_inner->getNativeHandle(); }
+
+private:
+    const sonnet::api::render::ITexture *m_inner;
+};
+
+} // anonymous namespace
 
 namespace sonnet::renderer::frontend {
 
@@ -39,6 +61,33 @@ GPUTextureHandle Renderer::createTexture(const TextureDesc &desc,
     GPUTextureHandle handle{m_nextId++};
     m_textures.emplace(handle, std::move(texture));
     return handle;
+}
+
+RenderTargetHandle Renderer::createRenderTarget(const RenderTargetDesc &desc) {
+    auto rt = m_backend.renderTargetFactory().create(desc);
+    RenderTargetHandle handle{m_nextId++};
+    m_renderTargets.emplace(handle, std::move(rt));
+    return handle;
+}
+
+void Renderer::bindRenderTarget(RenderTargetHandle handle) {
+    auto it = m_renderTargets.find(handle);
+    if (it == m_renderTargets.end()) return;
+    m_backend.bindRenderTarget(*it->second);
+}
+
+GPUTextureHandle Renderer::colorTextureHandle(RenderTargetHandle handle, std::size_t colorIndex) {
+    auto it = m_renderTargets.find(handle);
+    if (it == m_renderTargets.end())
+        throw std::invalid_argument("colorTextureHandle: unknown RenderTargetHandle");
+
+    const ITexture *tex = it->second->colorTexture(colorIndex);
+    if (!tex)
+        throw std::invalid_argument("colorTextureHandle: render target has no color texture at index");
+
+    GPUTextureHandle texHandle{m_nextId++};
+    m_textures.emplace(texHandle, std::make_unique<BorrowedTexture>(tex));
+    return texHandle;
 }
 
 // ── IRenderer ──────────────────────────────────────────────────────────────────

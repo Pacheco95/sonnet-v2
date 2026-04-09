@@ -34,6 +34,9 @@ void GlRendererBackend::clear(const api::render::ClearOptions &options) {
         glClearBufferfv(GL_COLOR, static_cast<GLint>(c.attachmentIndex), glm::value_ptr(c.value));
     }
     if (options.depth) {
+        // glClearBufferfv respects GL_DEPTH_WRITEMASK; force it on so the
+        // clear is never silently suppressed by a previous depthWrite=false pass.
+        glDepthMask(GL_TRUE);
         const float d = *options.depth;
         glClearBufferfv(GL_DEPTH, 0, &d);
     }
@@ -45,6 +48,10 @@ void GlRendererBackend::clear(const api::render::ClearOptions &options) {
 
 void GlRendererBackend::bindDefaultRenderTarget() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void GlRendererBackend::bindRenderTarget(const api::render::IRenderTarget &target) {
+    target.bind();
 }
 
 void GlRendererBackend::setViewport(std::uint32_t width, std::uint32_t height) {

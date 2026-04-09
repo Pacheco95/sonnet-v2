@@ -1,10 +1,11 @@
-// Sonnet v2 — Phase 15 demo
-// ImGui debug panel (Tab to toggle); Scene graph drives the render queue.
+// Sonnet v2 — Phase 16 demo
+// HDR offscreen pass → ACES tone-mapping → default framebuffer; ImGui debug panel (Tab).
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/input/InputSystem.h>
 #include <sonnet/loaders/ModelLoader.h>
 #include <sonnet/loaders/TextureLoader.h>
+#include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/ui/ImGuiLayer.h>
@@ -67,6 +68,38 @@ void main() {
     vec3  albedo  = texture(uAlbedo, vTexCoord).rgb;
     vec3  col     = (0.15 + diff * uDirLight.intensity) * uDirLight.color * albedo;
     fragColor     = vec4(col, 1.0);
+}
+)glsl";
+
+// ── Tone-mapping pass shaders ─────────────────────────────────────────────────
+
+static constexpr const char *TONEMAP_VERT = R"glsl(
+#version 330 core
+layout(location = 0) in vec3 aPosition;
+layout(location = 2) in vec2 aTexCoord;
+out vec2 vUV;
+void main() {
+    gl_Position = vec4(aPosition.xy, 0.0, 1.0);
+    vUV = aTexCoord;
+}
+)glsl";
+
+static constexpr const char *TONEMAP_FRAG = R"glsl(
+#version 330 core
+in  vec2 vUV;
+out vec4 fragColor;
+uniform sampler2D uHdrColor;
+uniform float     uExposure;
+
+// ACES filmic tone-mapping approximation (Krzysztof Narkowicz)
+vec3 aces(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+void main() {
+    vec3 hdr    = texture(uHdrColor, vUV).rgb * uExposure;
+    fragColor   = vec4(aces(hdr), 1.0);
 }
 )glsl";
 
@@ -171,11 +204,41 @@ int main() {
         .material = cubeMat,
     };
 
+    // ── HDR render target (created once; resized when the window changes) ──────
+    const auto fbSize0 = window.getFrameBufferSize();
+    auto hdrRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+        .width  = fbSize0.x,
+        .height = fbSize0.y,
+        .colors = {{
+            .format = sonnet::api::render::TextureFormat::RGBA16F,
+            .samplerDesc = {
+                .minFilter = sonnet::api::render::MinFilter::Linear,
+                .magFilter = sonnet::api::render::MagFilter::Linear,
+                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+            },
+        }},
+        .depth  = sonnet::api::render::RenderBufferDesc{},
+    });
+    auto hdrTexHandle = renderer.colorTextureHandle(hdrRTHandle, 0);
+
+    // ── Tone-mapping fullscreen quad ───────────────────────────────────────────
+    const auto quadMesh        = sonnet::primitives::makeQuad({2.0f, 2.0f});
+    const auto quadMeshHandle  = renderer.createMesh(quadMesh);
+    const auto tonemapShader   = renderer.createShader(TONEMAP_VERT, TONEMAP_FRAG);
+    const auto tonemapMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = tonemapShader,
+        .renderState  = {.depthTest = false, .depthWrite = false, .cull = sonnet::api::render::CullMode::None},
+    });
+    sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
+    tonemapMat.addTexture("uHdrColor", hdrTexHandle);
+
     // Tweakable state exposed via ImGui.
     float              rotationSpeed  = 45.0f;
     glm::vec3          lightDir       = {0.6f, 1.0f, 0.4f};
     glm::vec3          lightColor     = {1.0f, 1.0f, 1.0f};
     float              lightIntensity = 1.0f;
+    float              exposure       = 1.0f;
     bool               uiMode         = false;  // Tab toggles cursor capture
 
     FlyCamera camera;
@@ -211,7 +274,8 @@ int main() {
             glm::angleAxis(glm::radians(rotation * 0.3f), glm::vec3{1, 0, 0})
         );
 
-        backend.bindDefaultRenderTarget();
+        // ── Pass 1: render scene to HDR offscreen target ───────────────────────
+        renderer.bindRenderTarget(hdrRTHandle);
         backend.setViewport(fbSize.x, fbSize.y);
         backend.clear({
             .colors = {{0, {0.1f, 0.1f, 0.15f, 1.0f}}},
@@ -239,6 +303,34 @@ int main() {
         renderer.render(ctx, queue);
         renderer.endFrame();
 
+        // ── Pass 2: tone-map HDR → default framebuffer ────────────────────────
+        backend.bindDefaultRenderTarget();
+        backend.setViewport(fbSize.x, fbSize.y);
+        backend.clear({
+            .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}},
+        });
+
+        tonemapMat.set("uExposure", exposure);
+
+        const glm::mat4 identity{1.0f};
+        const glm::vec3 origin{0.0f};
+        sonnet::api::render::FrameContext tonemapCtx{
+            .viewMatrix       = identity,
+            .projectionMatrix = identity,
+            .viewPosition     = origin,
+            .viewportWidth    = fbSize.x,
+            .viewportHeight   = fbSize.y,
+            .deltaTime        = 0.0f,
+        };
+        std::vector<sonnet::api::render::RenderItem> tonemapQueue{{
+            .mesh        = quadMeshHandle,
+            .material    = tonemapMat,
+            .modelMatrix = glm::mat4{1.0f},
+        }};
+        renderer.beginFrame();
+        renderer.render(tonemapCtx, tonemapQueue);
+        renderer.endFrame();
+
         // ── ImGui ──────────────────────────────────────────────────────────────
         imgui.begin();
         if (uiMode) {
@@ -248,6 +340,10 @@ int main() {
                 ImGui::DragFloat3("Direction",  &lightDir.x,   0.01f, -1.0f, 1.0f);
                 ImGui::ColorEdit3("Color",      &lightColor.x);
                 ImGui::SliderFloat("Intensity", &lightIntensity, 0.0f, 4.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Tone-mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f);
             }
 
             if (ImGui::CollapsingHeader("Object", ImGuiTreeNodeFlags_DefaultOpen)) {

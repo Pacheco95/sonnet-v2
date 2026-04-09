@@ -49,6 +49,7 @@ public:
     // Framebuffer
     virtual void clear(const ClearOptions &options)                        = 0;
     virtual void bindDefaultRenderTarget()                                 = 0;
+    virtual void bindRenderTarget(const IRenderTarget &target)             = 0;
     virtual void setViewport(std::uint32_t width, std::uint32_t height)   = 0;
 
     // Pipeline state

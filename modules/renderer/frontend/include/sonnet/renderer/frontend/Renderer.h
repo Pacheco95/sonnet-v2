@@ -30,6 +30,12 @@ public:
     [[nodiscard]] core::GPUTextureHandle         createTexture(const api::render::TextureDesc &desc,
                                                                const api::render::SamplerDesc &sampler,
                                                                const api::render::CPUTextureBuffer &data);
+    [[nodiscard]] core::RenderTargetHandle       createRenderTarget(const api::render::RenderTargetDesc &desc);
+    void                                         bindRenderTarget(core::RenderTargetHandle handle);
+    // Returns a GPUTextureHandle that borrows the render target's color attachment.
+    // The handle is invalidated if the render target is destroyed.
+    [[nodiscard]] core::GPUTextureHandle         colorTextureHandle(core::RenderTargetHandle handle,
+                                                                    std::size_t colorIndex = 0);
 
     // ── IRenderer ─────────────────────────────────────────────────────────────
     void beginFrame() override;
@@ -52,6 +58,7 @@ private:
     std::unordered_map<core::ShaderHandle,           std::unique_ptr<api::render::IShader>>          m_shaders;
     std::unordered_map<core::MaterialTemplateHandle, api::render::MaterialTemplate>                  m_materials;
     std::unordered_map<core::GPUTextureHandle,       std::unique_ptr<api::render::ITexture>>         m_textures;
+    std::unordered_map<core::RenderTargetHandle,     std::unique_ptr<api::render::IRenderTarget>>    m_renderTargets;
 
     std::size_t m_nextId = 1; // monotonic id for handle generation
 };

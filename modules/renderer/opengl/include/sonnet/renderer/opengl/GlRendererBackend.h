@@ -28,6 +28,7 @@ public:
     // Framebuffer
     void clear(const api::render::ClearOptions &options)                      override;
     void bindDefaultRenderTarget()                                             override;
+    void bindRenderTarget(const api::render::IRenderTarget &target)            override;
     void setViewport(std::uint32_t width, std::uint32_t height)               override;
 
     // Pipeline state
