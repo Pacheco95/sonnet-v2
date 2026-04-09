@@ -9,9 +9,8 @@ target_link_libraries(demo PRIVATE
     glm::glm
 )
 
-# Copy assets next to the executable so relative paths work at runtime.
-add_custom_command(TARGET demo POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets
-        $<TARGET_FILE_DIR:demo>/assets
+# Bake the source-tree assets path into the binary so the demo can always find
+# its assets regardless of the working directory at runtime.
+target_compile_definitions(demo PRIVATE
+    DEMO_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )

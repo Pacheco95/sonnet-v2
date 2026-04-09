@@ -135,8 +135,8 @@ int main() {
 
     sonnet::renderer::frontend::Renderer renderer{backend};
 
-    // Load mesh: try OBJ from assets, fall back to procedural box.
-    const auto loadedMeshes = sonnet::loaders::ModelLoader::load("assets/cube.obj");
+    // Load mesh from OBJ via ModelLoader.
+    const auto loadedMeshes = sonnet::loaders::ModelLoader::load(DEMO_ASSETS_DIR "/cube.obj");
     const auto meshHandle   = renderer.createMesh(loadedMeshes[0]);
     const auto shaderHandle = renderer.createShader(VERT_SRC, FRAG_SRC);
 
@@ -146,7 +146,7 @@ int main() {
     });
 
     // Load checkerboard texture via TextureLoader.
-    const auto cpuTex  = sonnet::loaders::TextureLoader::load("assets/checkerboard.png");
+    const auto cpuTex  = sonnet::loaders::TextureLoader::load(DEMO_ASSETS_DIR "/checkerboard.png");
     const auto texDesc = sonnet::api::render::TextureDesc{
         .size       = {cpuTex.width, cpuTex.height},
         .format     = cpuTex.channels == 4 ? sonnet::api::render::TextureFormat::RGBA8

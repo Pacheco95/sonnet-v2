@@ -52,10 +52,9 @@ std::vector<CPUMesh> ModelLoader::load(const std::filesystem::path &path) {
     Assimp::Importer importer;
     const aiScene *scene = importer.ReadFile(
         path.string(),
-        aiProcess_Triangulate     |
-        aiProcess_GenSmoothNormals|
-        aiProcess_CalcTangentSpace|
-        aiProcess_FlipUVs
+        aiProcess_Triangulate      |
+        aiProcess_GenSmoothNormals |
+        aiProcess_CalcTangentSpace
     );
 
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
