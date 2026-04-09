@@ -1,5 +1,7 @@
 #include <sonnet/renderer/opengl/GlRenderTarget.h>
 
+#include <glad/glad.h>
+
 #include <cassert>
 #include <stdexcept>
 #include <variant>

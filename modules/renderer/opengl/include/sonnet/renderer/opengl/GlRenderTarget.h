@@ -4,8 +4,6 @@
 #include <sonnet/api/render/IRendererBackend.h>
 #include <sonnet/core/Macros.h>
 
-#include <glad/glad.h>
-
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -36,11 +34,11 @@ private:
 
     std::uint32_t m_width;
     std::uint32_t m_height;
-    GLuint        m_fbo = 0;
+    unsigned      m_fbo = 0;
 
     std::vector<std::unique_ptr<api::render::ITexture>> m_colorTextures;
     std::unique_ptr<api::render::ITexture>              m_depthTexture;
-    GLuint                                               m_depthRbo = 0;
+    unsigned                                             m_depthRbo = 0;
 };
 
 } // namespace sonnet::renderer::opengl

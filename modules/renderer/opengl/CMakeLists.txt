@@ -21,6 +21,5 @@ target_link_libraries(sonnet_renderer_opengl
     PUBLIC
         sonnet::api
         glm::glm
-    PRIVATE
         glad
 )
