@@ -55,6 +55,31 @@ foreach(_t assimp zlibstatic IrrXML uninstall)
 endforeach()
 
 FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.91.6
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(imgui)
+# ImGui has no CMakeLists — build it as a STATIC library from its source files.
+add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+add_library(imgui::imgui ALIAS imgui)
+target_include_directories(imgui PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+target_link_libraries(imgui PUBLIC glfw glad)
+set_target_properties(imgui PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+target_compile_options(imgui PRIVATE -w)
+
+FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
     GIT_TAG master

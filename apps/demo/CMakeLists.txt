@@ -5,6 +5,8 @@ target_link_libraries(demo PRIVATE
     sonnet::primitives
     sonnet::loaders
     sonnet::world
+    sonnet::ui
+    imgui::imgui
     sonnet::window
     sonnet::input
     glm::glm

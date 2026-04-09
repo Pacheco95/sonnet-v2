@@ -1,5 +1,5 @@
-// Sonnet v2 — Phase 14 demo
-// Scene graph with GameObject/Transform drives the render queue.
+// Sonnet v2 — Phase 15 demo
+// ImGui debug panel (Tab to toggle); Scene graph drives the render queue.
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/input/InputSystem.h>
@@ -7,9 +7,12 @@
 #include <sonnet/loaders/TextureLoader.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
+#include <sonnet/ui/ImGuiLayer.h>
 #include <sonnet/window/GLFWInputAdapter.h>
 #include <sonnet/window/GLFWWindow.h>
 #include <sonnet/world/Scene.h>
+
+#include <imgui.h>
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -131,6 +134,9 @@ int main() {
     sonnet::renderer::opengl::GlRendererBackend backend;
     backend.initialize();
 
+    sonnet::ui::ImGuiLayer imgui;
+    imgui.init(window.handle());
+
     sonnet::renderer::frontend::Renderer renderer{backend};
 
     // Load mesh from OBJ via ModelLoader.
@@ -165,6 +171,13 @@ int main() {
         .material = cubeMat,
     };
 
+    // Tweakable state exposed via ImGui.
+    float              rotationSpeed  = 45.0f;
+    glm::vec3          lightDir       = {0.6f, 1.0f, 0.4f};
+    glm::vec3          lightColor     = {1.0f, 1.0f, 1.0f};
+    float              lightIntensity = 1.0f;
+    bool               uiMode         = false;  // Tab toggles cursor capture
+
     FlyCamera camera;
     float rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -175,14 +188,24 @@ int main() {
         prevTime = now;
 
         window.pollEvents();
+
         if (input.isKeyJustPressed(sonnet::api::input::Key::Escape))
             window.requestClose();
 
-        const auto fbSize = window.getFrameBufferSize();
-        camera.update(dt, input, fbSize);
-        rotation += 45.0f * dt;
+        // Tab toggles between fly-camera mode and UI mode.
+        if (input.isKeyJustPressed(sonnet::api::input::Key::Tab)) {
+            uiMode = !uiMode;
+            if (uiMode) window.releaseCursor();
+            else        window.captureCursor();
+        }
 
-        // Update cube transform each frame.
+        const auto fbSize = window.getFrameBufferSize();
+
+        // Only move the camera when the cursor is captured.
+        if (!uiMode)
+            camera.update(dt, input, fbSize);
+
+        rotation += rotationSpeed * dt;
         cube.transform.setLocalRotation(
             glm::angleAxis(glm::radians(rotation),        glm::vec3{0, 1, 0}) *
             glm::angleAxis(glm::radians(rotation * 0.3f), glm::vec3{1, 0, 0})
@@ -203,9 +226,9 @@ int main() {
             .viewportHeight   = fbSize.y,
             .deltaTime        = dt,
             .directionalLight = sonnet::api::render::DirectionalLight{
-                .direction = {0.6f, 1.0f, 0.4f},
-                .color     = {1.0f, 1.0f, 1.0f},
-                .intensity = 1.0f,
+                .direction = lightDir,
+                .color     = lightColor,
+                .intensity = lightIntensity,
             },
         };
 
@@ -215,6 +238,31 @@ int main() {
         renderer.beginFrame();
         renderer.render(ctx, queue);
         renderer.endFrame();
+
+        // ── ImGui ──────────────────────────────────────────────────────────────
+        imgui.begin();
+        if (uiMode) {
+            ImGui::Begin("Debug  [Tab to close]");
+
+            if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::DragFloat3("Direction",  &lightDir.x,   0.01f, -1.0f, 1.0f);
+                ImGui::ColorEdit3("Color",      &lightColor.x);
+                ImGui::SliderFloat("Intensity", &lightIntensity, 0.0f, 4.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Object", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Rotation speed (°/s)", &rotationSpeed, 0.0f, 360.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                const glm::vec3 &p = camera.pos();
+                ImGui::Text("Position  %.2f  %.2f  %.2f", p.x, p.y, p.z);
+                ImGui::Text("%.1f FPS", ImGui::GetIO().Framerate);
+            }
+
+            ImGui::End();
+        }
+        imgui.end();
 
         window.swapBuffers();
         input.nextFrame();
