@@ -1,10 +1,11 @@
-// Sonnet v2 — Phase 12 demo
-// Renders a textured rotating box with Blinn-Phong directional lighting and a fly camera (WASD + mouse).
+// Sonnet v2 — Phase 13 demo
+// Renders a textured model loaded from OBJ with Blinn-Phong directional lighting and a fly camera (WASD + mouse).
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/api/render/RenderItem.h>
 #include <sonnet/input/InputSystem.h>
+#include <sonnet/loaders/ModelLoader.h>
 #include <sonnet/loaders/TextureLoader.h>
 #include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
@@ -134,8 +135,9 @@ int main() {
 
     sonnet::renderer::frontend::Renderer renderer{backend};
 
-    // Box from primitives module (Position + TexCoord + Normal).
-    const auto meshHandle   = renderer.createMesh(sonnet::primitives::makeBox({1.0f, 1.0f, 1.0f}));
+    // Load mesh: try OBJ from assets, fall back to procedural box.
+    const auto loadedMeshes = sonnet::loaders::ModelLoader::load("assets/cube.obj");
+    const auto meshHandle   = renderer.createMesh(loadedMeshes[0]);
     const auto shaderHandle = renderer.createShader(VERT_SRC, FRAG_SRC);
 
     const auto matHandle = renderer.createMaterial(sonnet::api::render::MaterialTemplate{

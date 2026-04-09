@@ -1,5 +1,6 @@
 add_library(sonnet_loaders STATIC
     src/TextureLoader.cpp
+    src/ModelLoader.cpp
 )
 
 add_library(sonnet::loaders ALIAS sonnet_loaders)
@@ -11,4 +12,5 @@ target_include_directories(sonnet_loaders PUBLIC
 target_link_libraries(sonnet_loaders
     PUBLIC  sonnet::api
     PRIVATE stb::image
+            assimp::assimp
 )
