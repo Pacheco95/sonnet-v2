@@ -26,7 +26,8 @@ public:
     [[nodiscard]] bool initialized() const { return m_initialized; }
 
 private:
-    bool m_initialized = false;
+    bool m_initialized    = false;
+    bool m_srgbWasEnabled = false;
 };
 
 } // namespace sonnet::ui

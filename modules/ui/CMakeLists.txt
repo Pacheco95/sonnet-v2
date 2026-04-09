@@ -11,4 +11,5 @@ target_include_directories(sonnet_ui PUBLIC
 target_link_libraries(sonnet_ui
     PUBLIC  sonnet::core
     PRIVATE imgui::imgui
+            glad
 )
