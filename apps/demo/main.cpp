@@ -1,10 +1,11 @@
-// Sonnet v2 — Phase 11 demo
-// Renders a rotating box with Blinn-Phong directional lighting and a fly camera (WASD + mouse).
+// Sonnet v2 — Phase 12 demo
+// Renders a textured rotating box with Blinn-Phong directional lighting and a fly camera (WASD + mouse).
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/api/render/RenderItem.h>
 #include <sonnet/input/InputSystem.h>
+#include <sonnet/loaders/TextureLoader.h>
 #include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
@@ -32,12 +33,14 @@ uniform mat4 uProjection;
 
 out vec3 vNormal;
 out vec3 vFragPos;
+out vec2 vTexCoord;
 
 void main() {
     vec4 worldPos   = uModel * vec4(aPosition, 1.0);
     gl_Position     = uProjection * uView * worldPos;
     vFragPos        = worldPos.xyz;
     vNormal         = mat3(transpose(inverse(uModel))) * aNormal;
+    vTexCoord       = aTexCoord;
 }
 )glsl";
 
@@ -45,6 +48,7 @@ static constexpr const char *FRAG_SRC = R"glsl(
 #version 330 core
 in  vec3 vNormal;
 in  vec3 vFragPos;
+in  vec2 vTexCoord;
 out vec4 fragColor;
 
 struct DirLight {
@@ -52,14 +56,15 @@ struct DirLight {
     vec3  color;
     float intensity;
 };
-uniform DirLight uDirLight;
-uniform vec3     uObjectColor;
+uniform DirLight  uDirLight;
+uniform sampler2D uAlbedo;
 
 void main() {
-    vec3  n    = normalize(vNormal);
-    float diff = max(dot(n, normalize(uDirLight.direction)), 0.0);
-    vec3  col  = (0.15 + diff * uDirLight.intensity) * uDirLight.color * uObjectColor;
-    fragColor  = vec4(col, 1.0);
+    vec3  n       = normalize(vNormal);
+    float diff    = max(dot(n, normalize(uDirLight.direction)), 0.0);
+    vec3  albedo  = texture(uAlbedo, vTexCoord).rgb;
+    vec3  col     = (0.15 + diff * uDirLight.intensity) * uDirLight.color * albedo;
+    fragColor     = vec4(col, 1.0);
 }
 )glsl";
 
@@ -138,6 +143,16 @@ int main() {
         .renderState  = {},
     });
 
+    // Load checkerboard texture via TextureLoader.
+    const auto cpuTex  = sonnet::loaders::TextureLoader::load("assets/checkerboard.png");
+    const auto texDesc = sonnet::api::render::TextureDesc{
+        .size       = {cpuTex.width, cpuTex.height},
+        .format     = cpuTex.channels == 4 ? sonnet::api::render::TextureFormat::RGBA8
+                                           : sonnet::api::render::TextureFormat::RGB8,
+        .colorSpace = sonnet::api::render::ColorSpace::sRGB,
+    };
+    const auto texHandle = renderer.createTexture(texDesc, {}, cpuTex);
+
     FlyCamera camera;
     float rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -180,9 +195,9 @@ int main() {
             },
         };
 
-        // Material instance with per-object color.
+        // Material instance with texture.
         sonnet::api::render::MaterialInstance mat{matHandle};
-        mat.set("uObjectColor", glm::vec3{0.4f, 0.7f, 1.0f});
+        mat.addTexture("uAlbedo", texHandle);
 
         std::vector<sonnet::api::render::RenderItem> queue;
         queue.push_back({

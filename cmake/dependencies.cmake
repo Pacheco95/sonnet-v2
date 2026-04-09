@@ -28,6 +28,14 @@ FetchContent_Declare(
 set(SPDLOG_FMT_EXTERNAL OFF)
 FetchContent_MakeAvailable(spdlog)
 
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(stb)
+
 if(SONNET_BUILD_TESTS)
     FetchContent_Declare(
         Catch2
