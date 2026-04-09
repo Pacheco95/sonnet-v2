@@ -1,11 +1,10 @@
-// Sonnet v2 — Phase 9 demo
-// Renders a rotating colored cube with a fly camera (WASD + mouse).
+// Sonnet v2 — Phase 10 demo
+// Renders a rotating box (from primitives module) with a fly camera (WASD + mouse).
 
-#include <sonnet/api/render/CPUMesh.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/api/render/RenderItem.h>
-#include <sonnet/api/render/VertexAttribute.h>
 #include <sonnet/input/InputSystem.h>
+#include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/window/GLFWInputAdapter.h>
@@ -14,87 +13,52 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <vector>
 
 // ── Embedded shaders ──────────────────────────────────────────────────────────
+// Vertex layout: position(0), texcoord(2), normal(3)
 
 static constexpr const char *VERT_SRC = R"glsl(
 #version 330 core
 layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec4 aColor;
+layout(location = 2) in vec2 aTexCoord;
+layout(location = 3) in vec3 aNormal;
 
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
 
-out vec4 vColor;
+out vec3 vNormal;
+out vec3 vFragPos;
 
 void main() {
-    gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
-    vColor = aColor;
+    vec4 worldPos   = uModel * vec4(aPosition, 1.0);
+    gl_Position     = uProjection * uView * worldPos;
+    vFragPos        = worldPos.xyz;
+    vNormal         = mat3(transpose(inverse(uModel))) * aNormal;
 }
 )glsl";
 
 static constexpr const char *FRAG_SRC = R"glsl(
 #version 330 core
-in  vec4 vColor;
+in  vec3 vNormal;
+in  vec3 vFragPos;
 out vec4 fragColor;
-void main() { fragColor = vColor; }
+
+uniform vec3 uLightDir;   // world-space, pointing toward the light
+uniform vec3 uLightColor;
+uniform vec3 uObjectColor;
+
+void main() {
+    vec3 n      = normalize(vNormal);
+    float diff  = max(dot(n, normalize(uLightDir)), 0.0);
+    vec3 color  = (0.15 + diff) * uLightColor * uObjectColor;
+    fragColor   = vec4(color, 1.0);
+}
 )glsl";
 
-// ── Cube mesh builder ─────────────────────────────────────────────────────────
-
-static sonnet::api::render::CPUMesh buildCube() {
-    using namespace sonnet::api::render;
-
-    // 8 corners: position maps directly to RGB color.
-    struct Vert { glm::vec3 pos; glm::vec4 color; };
-    static constexpr std::array<Vert, 8> verts{{
-        {{-0.5f,-0.5f,-0.5f}, {0,0,0,1}},
-        {{ 0.5f,-0.5f,-0.5f}, {1,0,0,1}},
-        {{-0.5f,-0.5f, 0.5f}, {0,0,1,1}},
-        {{ 0.5f,-0.5f, 0.5f}, {1,0,1,1}},
-        {{-0.5f, 0.5f,-0.5f}, {0,1,0,1}},
-        {{ 0.5f, 0.5f,-0.5f}, {1,1,0,1}},
-        {{-0.5f, 0.5f, 0.5f}, {0,1,1,1}},
-        {{ 0.5f, 0.5f, 0.5f}, {1,1,1,1}},
-    }};
-
-    static constexpr std::array<std::uint32_t, 36> idx{{
-        // Front (+z)
-        2,3,7, 2,7,6,
-        // Back (-z)
-        1,5,4, 1,4,0,
-        // Right (+x)
-        1,3,7, 1,7,5,
-        // Left (-x)
-        0,4,6, 0,6,2,
-        // Top (+y)
-        4,5,7, 4,7,6,
-        // Bottom (-y)
-        0,2,3, 0,3,1,
-    }};
-
-    KnownAttributeSet layout;
-    layout.insert(PositionAttribute{});
-    layout.insert(ColorAttribute{});
-
-    CPUMesh mesh{VertexLayout{layout},
-                 std::vector<CPUMesh::Index>(idx.begin(), idx.end()),
-                 8};
-
-    for (const auto &v : verts) {
-        KnownAttributeSet attrs;
-        attrs.insert(PositionAttribute{v.pos});
-        attrs.insert(ColorAttribute{v.color});
-        mesh.addVertex(attrs);
-    }
-    return mesh;
-}
-
-// ── Minimal fly camera ────────────────────────────────────────────────────────
+// ── Fly camera ────────────────────────────────────────────────────────────────
 
 class FlyCamera {
 public:
@@ -105,12 +69,10 @@ public:
                 const glm::uvec2 &viewport) {
         using sonnet::api::input::Key;
 
-        // Mouse look.
         const glm::vec2 delta = input.mouseDelta();
         m_yaw   += delta.x * m_sensitivity;
         m_pitch  = std::clamp(m_pitch - delta.y * m_sensitivity, -89.0f, 89.0f);
 
-        // Direction vectors.
         const float yr = glm::radians(m_yaw);
         const float pr = glm::radians(m_pitch);
         m_front = glm::normalize(glm::vec3{
@@ -120,7 +82,6 @@ public:
         });
         const glm::vec3 right = glm::normalize(glm::cross(m_front, WORLD_UP));
 
-        // WASD movement.
         const float speed = m_speed * dt;
         if (input.isKeyDown(Key::W)) m_pos += m_front  * speed;
         if (input.isKeyDown(Key::S)) m_pos -= m_front  * speed;
@@ -129,7 +90,6 @@ public:
         if (input.isKeyDown(Key::E)) m_pos += WORLD_UP * speed;
         if (input.isKeyDown(Key::Q)) m_pos -= WORLD_UP * speed;
 
-        // Matrices.
         m_view = glm::lookAt(m_pos, m_pos + m_front, WORLD_UP);
         const float aspect = viewport.x > 0 && viewport.y > 0
             ? static_cast<float>(viewport.x) / static_cast<float>(viewport.y)
@@ -153,22 +113,19 @@ private:
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 int main() {
-    // Window + input.
     sonnet::window::GLFWWindow window{{1280, 720, "Sonnet v2 Demo"}};
     sonnet::input::InputSystem input;
     sonnet::window::GLFWInputAdapter adapter{input};
     window.setInputAdapter(&adapter);
     window.captureCursor();
 
-    // Backend.
     sonnet::renderer::opengl::GlRendererBackend backend;
     backend.initialize();
 
-    // Frontend renderer.
     sonnet::renderer::frontend::Renderer renderer{backend};
 
-    // Upload assets.
-    const auto meshHandle = renderer.createMesh(buildCube());
+    // Box from primitives module (Position + TexCoord + Normal).
+    const auto meshHandle   = renderer.createMesh(sonnet::primitives::makeBox({1.0f, 1.0f, 1.0f}));
     const auto shaderHandle = renderer.createShader(VERT_SRC, FRAG_SRC);
 
     const auto matHandle = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
@@ -178,40 +135,32 @@ int main() {
 
     FlyCamera camera;
     float rotation = 0.0f;
-
     double prevTime = glfwGetTime();
 
     while (!window.shouldClose()) {
-        // Delta time.
         const double now = glfwGetTime();
         const float dt = static_cast<float>(now - prevTime);
         prevTime = now;
 
         window.pollEvents();
-
-        if (input.isKeyJustPressed(sonnet::api::input::Key::Escape)) {
+        if (input.isKeyJustPressed(sonnet::api::input::Key::Escape))
             window.requestClose();
-        }
 
         const auto fbSize = window.getFrameBufferSize();
         camera.update(dt, input, fbSize);
-
         rotation += 45.0f * dt;
 
-        // Clear.
         backend.bindDefaultRenderTarget();
         backend.setViewport(fbSize.x, fbSize.y);
         backend.clear({
-            .colors  = {{0, {0.1f, 0.1f, 0.15f, 1.0f}}},
-            .depth   = 1.0f,
+            .colors = {{0, {0.1f, 0.1f, 0.15f, 1.0f}}},
+            .depth  = 1.0f,
         });
 
-        // Build model matrix.
         glm::mat4 model{1.0f};
-        model = glm::rotate(model, glm::radians(rotation),       {0, 1, 0});
+        model = glm::rotate(model, glm::radians(rotation),        {0, 1, 0});
         model = glm::rotate(model, glm::radians(rotation * 0.3f), {1, 0, 0});
 
-        // Render.
         sonnet::api::render::FrameContext ctx{
             .viewMatrix       = camera.view(),
             .projectionMatrix = camera.proj(),
@@ -221,10 +170,16 @@ int main() {
             .deltaTime        = dt,
         };
 
+        // Material instance with per-frame light and object uniforms.
+        sonnet::api::render::MaterialInstance mat{matHandle};
+        mat.set("uLightDir",    glm::vec3{0.6f, 1.0f, 0.4f});
+        mat.set("uLightColor",  glm::vec3{1.0f, 1.0f, 1.0f});
+        mat.set("uObjectColor", glm::vec3{0.4f, 0.7f, 1.0f});
+
         std::vector<sonnet::api::render::RenderItem> queue;
         queue.push_back({
             .mesh        = meshHandle,
-            .material    = sonnet::api::render::MaterialInstance{matHandle},
+            .material    = mat,
             .modelMatrix = model,
         });
 
