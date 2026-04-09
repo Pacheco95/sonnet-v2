@@ -3,8 +3,6 @@
 #include <sonnet/api/render/ITexture.h>
 #include <sonnet/core/Macros.h>
 
-#include <glad/glad.h>
-
 namespace sonnet::renderer::opengl {
 
 class GlTexture2D final : public api::render::ITexture {
@@ -31,7 +29,7 @@ public:
     [[nodiscard]] unsigned getNativeHandle()                    const override { return m_texture; }
 
 private:
-    GLuint                      m_texture    = 0;
+    unsigned                    m_texture    = 0;
     api::render::TextureDesc    m_textureDesc;
     api::render::SamplerDesc    m_samplerDesc;
 
