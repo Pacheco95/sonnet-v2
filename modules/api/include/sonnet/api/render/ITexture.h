@@ -33,7 +33,7 @@ struct TextureDesc {
     ColorSpace    colorSpace= ColorSpace::Linear;
     bool          useMipmaps= true;
 
-    auto operator<=>(const TextureDesc &) const = default;
+    bool operator==(const TextureDesc &) const = default;
 };
 
 struct SamplerDesc {
@@ -43,7 +43,7 @@ struct SamplerDesc {
     TextureWrap wrapT   = TextureWrap::Repeat;
     TextureWrap wrapR   = TextureWrap::Repeat;
 
-    auto operator<=>(const SamplerDesc &) const = default;
+    bool operator==(const SamplerDesc &) const = default;
 
     [[nodiscard]] constexpr bool requiresMipmaps() const noexcept {
         return minFilter != MinFilter::Nearest && minFilter != MinFilter::Linear;

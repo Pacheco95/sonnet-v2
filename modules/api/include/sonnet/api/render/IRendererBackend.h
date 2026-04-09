@@ -17,6 +17,12 @@
 
 namespace sonnet::api::render {
 
+// Forward declarations so IRendererBackend can reference factory interfaces.
+class IShaderCompiler;
+class ITextureFactory;
+class IRenderTargetFactory;
+class IGpuMeshFactory;
+
 struct ColorClear {
     std::uint32_t attachmentIndex;
     glm::vec4     value;
@@ -79,12 +85,17 @@ public:
 class ITextureFactory {
 public:
     virtual ~ITextureFactory() = default;
+    // Create from CPU data.
     [[nodiscard]] virtual std::unique_ptr<ITexture> create(
         const TextureDesc &desc, const SamplerDesc &sampler,
         const CPUTextureBuffer &data) const = 0;
+    // Create from cubemap faces.
     [[nodiscard]] virtual std::unique_ptr<ITexture> create(
         const TextureDesc &desc, const SamplerDesc &sampler,
         const CubeMapFaces &faces) const = 0;
+    // Allocate without data (for render targets).
+    [[nodiscard]] virtual std::unique_ptr<ITexture> create(
+        const TextureDesc &desc, const SamplerDesc &sampler) const = 0;
 };
 
 class IRenderTargetFactory {
