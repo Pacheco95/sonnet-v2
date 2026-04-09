@@ -1,6 +1,7 @@
 #include <sonnet/renderer/frontend/Renderer.h>
 
 #include <glm/glm.hpp>
+#include <string>
 
 namespace sonnet::renderer::frontend {
 
@@ -124,21 +125,42 @@ void Renderer::bindMaterial(const MaterialInstance &mat,
     const IShader &shader = *shaderIt->second;
     const auto &uniforms  = shader.getUniforms();
 
-    // Upload built-in matrices if the shader declares them.
-    auto uploadMatrix = [&](const char *name, const glm::mat4 &m) {
+    // Upload built-in uniforms if the shader declares them.
+    auto upload = [&](const std::string &name, const core::UniformValue &val) {
         if (auto it = uniforms.find(name); it != uniforms.end()) {
-            m_backend.setUniform(it->second.location, m);
+            m_backend.setUniform(it->second.location, val);
         }
     };
-    uploadMatrix("uModel",      modelMatrix);
-    uploadMatrix("uView",       ctx.viewMatrix);
-    uploadMatrix("uProjection", ctx.projectionMatrix);
+    upload("uModel",      modelMatrix);
+    upload("uView",       ctx.viewMatrix);
+    upload("uProjection", ctx.projectionMatrix);
+
+    // Upload directional light if present.
+    if (ctx.directionalLight) {
+        const auto &dl = *ctx.directionalLight;
+        upload("uDirLight.direction", dl.direction);
+        upload("uDirLight.color",     dl.color);
+        upload("uDirLight.intensity", dl.intensity);
+    }
+
+    // Upload point lights if present.
+    if (!ctx.pointLights.empty()) {
+        upload("uPointLightCount", static_cast<int>(ctx.pointLights.size()));
+        for (std::size_t i = 0; i < ctx.pointLights.size(); ++i) {
+            const auto &pl     = ctx.pointLights[i];
+            const std::string  p = "uPointLights[" + std::to_string(i) + "].";
+            upload(p + "position",  pl.position);
+            upload(p + "color",     pl.color);
+            upload(p + "intensity", pl.intensity);
+            upload(p + "constant",  pl.constant);
+            upload(p + "linear",    pl.linear);
+            upload(p + "quadratic", pl.quadratic);
+        }
+    }
 
     // Upload material uniform values.
     for (const auto &[name, value] : mat.values()) {
-        if (auto it = uniforms.find(name); it != uniforms.end()) {
-            m_backend.setUniform(it->second.location, value);
-        }
+        upload(name, value);
     }
 
     // Bind textures.

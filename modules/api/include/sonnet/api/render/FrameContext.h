@@ -1,7 +1,12 @@
 #pragma once
 
+#include <sonnet/api/render/Light.h>
+
 #include <glm/glm.hpp>
+
 #include <cstdint>
+#include <optional>
+#include <vector>
 
 namespace sonnet::api::render {
 
@@ -12,6 +17,9 @@ struct FrameContext {
     std::uint32_t    viewportWidth;
     std::uint32_t    viewportHeight;
     float            deltaTime;
+
+    std::optional<DirectionalLight> directionalLight;
+    std::vector<PointLight>         pointLights;
 };
 
 } // namespace sonnet::api::render

@@ -1,6 +1,7 @@
-// Sonnet v2 — Phase 10 demo
-// Renders a rotating box (from primitives module) with a fly camera (WASD + mouse).
+// Sonnet v2 — Phase 11 demo
+// Renders a rotating box with Blinn-Phong directional lighting and a fly camera (WASD + mouse).
 
+#include <sonnet/api/render/Light.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/api/render/RenderItem.h>
 #include <sonnet/input/InputSystem.h>
@@ -46,15 +47,19 @@ in  vec3 vNormal;
 in  vec3 vFragPos;
 out vec4 fragColor;
 
-uniform vec3 uLightDir;   // world-space, pointing toward the light
-uniform vec3 uLightColor;
-uniform vec3 uObjectColor;
+struct DirLight {
+    vec3  direction;
+    vec3  color;
+    float intensity;
+};
+uniform DirLight uDirLight;
+uniform vec3     uObjectColor;
 
 void main() {
-    vec3 n      = normalize(vNormal);
-    float diff  = max(dot(n, normalize(uLightDir)), 0.0);
-    vec3 color  = (0.15 + diff) * uLightColor * uObjectColor;
-    fragColor   = vec4(color, 1.0);
+    vec3  n    = normalize(vNormal);
+    float diff = max(dot(n, normalize(uDirLight.direction)), 0.0);
+    vec3  col  = (0.15 + diff * uDirLight.intensity) * uDirLight.color * uObjectColor;
+    fragColor  = vec4(col, 1.0);
 }
 )glsl";
 
@@ -168,12 +173,15 @@ int main() {
             .viewportWidth    = fbSize.x,
             .viewportHeight   = fbSize.y,
             .deltaTime        = dt,
+            .directionalLight = sonnet::api::render::DirectionalLight{
+                .direction = {0.6f, 1.0f, 0.4f},
+                .color     = {1.0f, 1.0f, 1.0f},
+                .intensity = 1.0f,
+            },
         };
 
-        // Material instance with per-frame light and object uniforms.
+        // Material instance with per-object color.
         sonnet::api::render::MaterialInstance mat{matHandle};
-        mat.set("uLightDir",    glm::vec3{0.6f, 1.0f, 0.4f});
-        mat.set("uLightColor",  glm::vec3{1.0f, 1.0f, 1.0f});
         mat.set("uObjectColor", glm::vec3{0.4f, 0.7f, 1.0f});
 
         std::vector<sonnet::api::render::RenderItem> queue;
