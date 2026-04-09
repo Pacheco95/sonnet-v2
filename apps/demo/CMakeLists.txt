@@ -4,6 +4,7 @@ target_link_libraries(demo PRIVATE
     sonnet::renderer::frontend
     sonnet::primitives
     sonnet::loaders
+    sonnet::world
     sonnet::window
     sonnet::input
     glm::glm

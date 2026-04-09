@@ -1,19 +1,17 @@
-// Sonnet v2 — Phase 13 demo
-// Renders a textured model loaded from OBJ with Blinn-Phong directional lighting and a fly camera (WASD + mouse).
+// Sonnet v2 — Phase 14 demo
+// Scene graph with GameObject/Transform drives the render queue.
 
 #include <sonnet/api/render/Light.h>
-#include <sonnet/api/render/Material.h>
-#include <sonnet/api/render/RenderItem.h>
 #include <sonnet/input/InputSystem.h>
 #include <sonnet/loaders/ModelLoader.h>
 #include <sonnet/loaders/TextureLoader.h>
-#include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/window/GLFWInputAdapter.h>
 #include <sonnet/window/GLFWWindow.h>
+#include <sonnet/world/Scene.h>
 
-#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -155,6 +153,18 @@ int main() {
     };
     const auto texHandle = renderer.createTexture(texDesc, {}, cpuTex);
 
+    // Build material instance (shared across frames; texture slot is constant).
+    sonnet::api::render::MaterialInstance cubeMat{matHandle};
+    cubeMat.addTexture("uAlbedo", texHandle);
+
+    // Scene setup.
+    sonnet::world::Scene scene;
+    auto &cube = scene.createObject("Cube");
+    cube.render = sonnet::world::RenderComponent{
+        .mesh     = meshHandle,
+        .material = cubeMat,
+    };
+
     FlyCamera camera;
     float rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -172,16 +182,18 @@ int main() {
         camera.update(dt, input, fbSize);
         rotation += 45.0f * dt;
 
+        // Update cube transform each frame.
+        cube.transform.setLocalRotation(
+            glm::angleAxis(glm::radians(rotation),        glm::vec3{0, 1, 0}) *
+            glm::angleAxis(glm::radians(rotation * 0.3f), glm::vec3{1, 0, 0})
+        );
+
         backend.bindDefaultRenderTarget();
         backend.setViewport(fbSize.x, fbSize.y);
         backend.clear({
             .colors = {{0, {0.1f, 0.1f, 0.15f, 1.0f}}},
             .depth  = 1.0f,
         });
-
-        glm::mat4 model{1.0f};
-        model = glm::rotate(model, glm::radians(rotation),        {0, 1, 0});
-        model = glm::rotate(model, glm::radians(rotation * 0.3f), {1, 0, 0});
 
         sonnet::api::render::FrameContext ctx{
             .viewMatrix       = camera.view(),
@@ -197,16 +209,8 @@ int main() {
             },
         };
 
-        // Material instance with texture.
-        sonnet::api::render::MaterialInstance mat{matHandle};
-        mat.addTexture("uAlbedo", texHandle);
-
         std::vector<sonnet::api::render::RenderItem> queue;
-        queue.push_back({
-            .mesh        = meshHandle,
-            .material    = mat,
-            .modelMatrix = model,
-        });
+        scene.buildRenderQueue(queue);
 
         renderer.beginFrame();
         renderer.render(ctx, queue);
