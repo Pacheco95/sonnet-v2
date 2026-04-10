@@ -238,6 +238,9 @@ int main() {
     };
     const auto texHandle = renderer.createTexture(texDesc, {}, cpuTex);
 
+    // Floor mesh — a thin wide box that receives the cube's shadow.
+    const auto floorMeshHandle = renderer.createMesh(sonnet::primitives::makeBox({6.0f, 0.1f, 6.0f}));
+
     // ── Shadow map render target (depth texture, no colour) ───────────────────
     constexpr std::uint32_t SHADOW_SIZE = 2048;
     const auto shadowRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
@@ -264,17 +267,28 @@ int main() {
     });
     sonnet::api::render::MaterialInstance shadowMat{shadowMatTmpl};
 
-    // Main material instance — albedo + shadow map.
-    sonnet::api::render::MaterialInstance cubeMat{matHandle};
-    cubeMat.addTexture("uAlbedo",    texHandle);
-    cubeMat.addTexture("uShadowMap", shadowDepthHandle);
+    // Helper: build a material instance for a scene object.
+    auto makeLitMat = [&]() {
+        sonnet::api::render::MaterialInstance mat{matHandle};
+        mat.addTexture("uAlbedo",    texHandle);
+        mat.addTexture("uShadowMap", shadowDepthHandle);
+        return mat;
+    };
 
     // Scene setup.
     sonnet::world::Scene scene;
+
     auto &cube = scene.createObject("Cube");
     cube.render = sonnet::world::RenderComponent{
         .mesh     = meshHandle,
-        .material = cubeMat,
+        .material = makeLitMat(),
+    };
+
+    auto &floor = scene.createObject("Floor");
+    floor.transform.setLocalPosition({0.0f, -0.8f, 0.0f});
+    floor.render = sonnet::world::RenderComponent{
+        .mesh     = floorMeshHandle,
+        .material = makeLitMat(),
     };
 
     // ── HDR render target ─────────────────────────────────────────────────────
@@ -358,7 +372,7 @@ int main() {
         const glm::mat4 lightView = glm::lookAt(lightDirNorm * 10.0f,
                                                 glm::vec3{0.0f},
                                                 lightUp);
-        const glm::mat4 lightProj = glm::ortho(-2.0f, 2.0f, -2.0f, 2.0f, 1.0f, 20.0f);
+        const glm::mat4 lightProj = glm::ortho(-4.0f, 4.0f, -4.0f, 4.0f, 1.0f, 20.0f);
         const glm::mat4 lightSpaceMat = lightProj * lightView;
 
         // ── Pass 1: shadow map ─────────────────────────────────────────────────
@@ -397,7 +411,9 @@ int main() {
             .depth  = 1.0f,
         });
 
-        cubeMat.set("uShadowBias", shadowBias);
+        for (const auto &obj : scene.objects()) {
+            if (obj->render) obj->render->material.set("uShadowBias", shadowBias);
+        }
 
         sonnet::api::render::FrameContext ctx{
             .viewMatrix       = camera.view(),
