@@ -2,9 +2,12 @@
 
 namespace sonnet::world {
 
-GameObject &Scene::createObject(std::string name) {
+GameObject &Scene::createObject(std::string name, GameObject *parent) {
     m_objects.push_back(std::make_unique<GameObject>(std::move(name)));
-    return *m_objects.back();
+    GameObject &obj = *m_objects.back();
+    if (parent)
+        obj.transform.setParent(&parent->transform, /*keepWorldTransform=*/false);
+    return obj;
 }
 
 void Scene::buildRenderQueue(std::vector<api::render::RenderItem> &queue) const {

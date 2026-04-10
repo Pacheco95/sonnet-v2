@@ -280,7 +280,13 @@ int main() {
     // Scene setup.
     sonnet::world::Scene scene;
 
-    auto &cube = scene.createObject("Cube");
+    // "Arm" is an invisible pivot at the origin. Rotating it sweeps the cube
+    // in an orbit — a simple demonstration of parent-child transforms.
+    auto &arm = scene.createObject("Arm");
+
+    // Cube is a child of Arm, offset 1.5 units along +X in local space.
+    auto &cube = scene.createObject("Cube", &arm);
+    cube.transform.setLocalPosition({1.5f, 0.0f, 0.0f});
     cube.render = sonnet::world::RenderComponent{
         .mesh     = meshHandle,
         .material = makeLitMat(),
@@ -361,10 +367,12 @@ int main() {
             camera.update(dt, input, fbSize);
 
         rotation += rotationSpeed * dt;
+        // Arm orbits around Y — the cube follows as a child.
+        arm.transform.setLocalRotation(
+            glm::angleAxis(glm::radians(rotation), glm::vec3{0, 1, 0}));
+        // Cube also self-spins on its local X axis.
         cube.transform.setLocalRotation(
-            glm::angleAxis(glm::radians(rotation),        glm::vec3{0, 1, 0}) *
-            glm::angleAxis(glm::radians(rotation * 0.3f), glm::vec3{1, 0, 0})
-        );
+            glm::angleAxis(glm::radians(rotation * 0.5f), glm::vec3{1, 0, 0}));
 
         // ── Light-space matrix (orthographic projection from the light) ────────
         const glm::vec3 lightDirNorm = glm::normalize(lightDir);

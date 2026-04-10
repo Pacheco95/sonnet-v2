@@ -43,6 +43,49 @@ TEST_CASE("Scene::buildRenderQueue includes objects with RenderComponent", "[sce
     REQUIRE_THAT(queue[0].modelMatrix[3].x, Catch::Matchers::WithinAbs(1.0f, 1e-5f));
 }
 
+TEST_CASE("Scene: child object world matrix includes parent transform", "[scene]") {
+    Scene scene;
+    auto &parent = scene.createObject("Parent");
+    parent.transform.setLocalPosition({10.0f, 0.0f, 0.0f});
+
+    auto &child = scene.createObject("Child", &parent);
+    child.transform.setLocalPosition({1.0f, 0.0f, 0.0f});
+    child.render = RenderComponent{
+        .mesh     = core::GPUMeshHandle{1},
+        .material = api::render::MaterialInstance{core::MaterialTemplateHandle{1}},
+    };
+
+    std::vector<api::render::RenderItem> queue;
+    scene.buildRenderQueue(queue);
+
+    REQUIRE(queue.size() == 1);
+    // World position = parent(10) + local(1) = 11
+    REQUIRE_THAT(queue[0].modelMatrix[3].x, Catch::Matchers::WithinAbs(11.0f, 1e-5f));
+}
+
+TEST_CASE("Scene: parent rotation is inherited by child world matrix", "[scene]") {
+    Scene scene;
+    auto &parent = scene.createObject("Parent");
+    // 90° around Y: maps +X to -Z
+    parent.transform.setLocalRotation(
+        glm::angleAxis(glm::radians(90.0f), glm::vec3{0.0f, 1.0f, 0.0f}));
+
+    auto &child = scene.createObject("Child", &parent);
+    child.transform.setLocalPosition({1.0f, 0.0f, 0.0f});
+    child.render = RenderComponent{
+        .mesh     = core::GPUMeshHandle{1},
+        .material = api::render::MaterialInstance{core::MaterialTemplateHandle{1}},
+    };
+
+    std::vector<api::render::RenderItem> queue;
+    scene.buildRenderQueue(queue);
+
+    REQUIRE(queue.size() == 1);
+    // After 90° Y rotation, child at local +X lands at world -Z
+    REQUIRE_THAT(queue[0].modelMatrix[3].x, Catch::Matchers::WithinAbs( 0.0f, 1e-4f));
+    REQUIRE_THAT(queue[0].modelMatrix[3].z, Catch::Matchers::WithinAbs(-1.0f, 1e-4f));
+}
+
 TEST_CASE("Scene::buildRenderQueue uses worldMatrix from Transform", "[scene]") {
     Scene scene;
     auto &obj = scene.createObject("Scaled");

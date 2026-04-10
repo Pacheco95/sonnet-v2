@@ -11,8 +11,10 @@ namespace sonnet::world {
 
 class Scene {
 public:
-    // Create a root-level object and return a reference to it.
-    [[nodiscard]] GameObject &createObject(std::string name);
+    // Create an object. If parent is non-null the object's transform is
+    // attached to the parent's transform (keepWorldTransform = false).
+    [[nodiscard]] GameObject &createObject(std::string name,
+                                           GameObject  *parent = nullptr);
 
     // Append a RenderItem for every object that has a RenderComponent.
     void buildRenderQueue(std::vector<api::render::RenderItem> &queue) const;
