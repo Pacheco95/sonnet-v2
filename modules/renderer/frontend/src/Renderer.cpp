@@ -226,7 +226,11 @@ void Renderer::bindMaterial(const MaterialInstance &mat,
         }
     }
 
-    // Upload material uniform values.
+    // Upload material uniform values: template defaults first, then per-instance
+    // overrides so that instances only need to set values that differ.
+    for (const auto &[name, value] : tmpl.defaultValues) {
+        upload(name, value);
+    }
     for (const auto &[name, value] : mat.values()) {
         upload(name, value);
     }

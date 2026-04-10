@@ -225,8 +225,9 @@ int main() {
     const auto shaderHandle = renderer.createShader(VERT_SRC, FRAG_SRC);
 
     const auto matHandle = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
-        .shaderHandle = shaderHandle,
-        .renderState  = {},
+        .shaderHandle  = shaderHandle,
+        .renderState   = {},
+        .defaultValues = {{"uShadowBias", 0.005f}},
     });
 
     // Load checkerboard texture via TextureLoader.
@@ -241,6 +242,24 @@ int main() {
 
     // Floor mesh — a thin wide box that receives the cube's shadow.
     const auto floorMeshHandle = renderer.createMesh(sonnet::primitives::makeBox({6.0f, 0.1f, 6.0f}));
+
+    // Solid light-gray 1×1 texture for the floor — demonstrates per-instance albedo override.
+    static constexpr std::byte kGray[] = {std::byte{180}, std::byte{180}, std::byte{180}};
+    const auto floorTexHandle = renderer.createTexture(
+        sonnet::api::render::TextureDesc{
+            .size       = {1, 1},
+            .format     = sonnet::api::render::TextureFormat::RGB8,
+            .colorSpace = sonnet::api::render::ColorSpace::sRGB,
+            .useMipmaps = false,
+        },
+        {},
+        sonnet::api::render::CPUTextureBuffer{
+            .width    = 1,
+            .height   = 1,
+            .channels = 3,
+            .texels   = sonnet::core::Texels{kGray, std::size(kGray)},
+        }
+    );
 
     // ── Shadow map render target (depth texture, no colour) ───────────────────
     constexpr std::uint32_t SHADOW_SIZE = 2048;
@@ -269,14 +288,6 @@ int main() {
     });
     sonnet::api::render::MaterialInstance shadowMat{shadowMatTmpl};
 
-    // Helper: build a material instance for a scene object.
-    auto makeLitMat = [&]() {
-        sonnet::api::render::MaterialInstance mat{matHandle};
-        mat.addTexture("uAlbedo",    texHandle);
-        mat.addTexture("uShadowMap", shadowDepthHandle);
-        return mat;
-    };
-
     // Scene setup.
     sonnet::world::Scene scene;
 
@@ -284,20 +295,29 @@ int main() {
     // in an orbit — a simple demonstration of parent-child transforms.
     auto &arm = scene.createObject("Arm");
 
-    // Cube is a child of Arm, offset 1.5 units along +X in local space.
+    // Cube: checkerboard albedo.
     auto &cube = scene.createObject("Cube", &arm);
     cube.transform.setLocalPosition({1.5f, 0.0f, 0.0f});
-    cube.render = sonnet::world::RenderComponent{
-        .mesh     = meshHandle,
-        .material = makeLitMat(),
-    };
+    {
+        sonnet::api::render::MaterialInstance m{matHandle};
+        m.addTexture("uAlbedo",    texHandle);
+        m.addTexture("uShadowMap", shadowDepthHandle);
+        cube.render = sonnet::world::RenderComponent{.mesh = meshHandle, .material = std::move(m)};
+    }
 
+    // Floor: solid light-gray albedo — same template, different per-instance texture.
     auto &floor = scene.createObject("Floor");
     floor.transform.setLocalPosition({0.0f, -0.8f, 0.0f});
-    floor.render = sonnet::world::RenderComponent{
-        .mesh     = floorMeshHandle,
-        .material = makeLitMat(),
-    };
+    {
+        sonnet::api::render::MaterialInstance m{matHandle};
+        m.addTexture("uAlbedo",    floorTexHandle);
+        m.addTexture("uShadowMap", shadowDepthHandle);
+        floor.render = sonnet::world::RenderComponent{.mesh = floorMeshHandle, .material = std::move(m)};
+    }
+
+    // Named material refs for per-frame uniform updates (e.g. shadow bias slider).
+    auto &cubeMat  = cube.render->material;
+    auto &floorMat = floor.render->material;
 
     // ── HDR render target ─────────────────────────────────────────────────────
     const auto fbSize0    = window.getFrameBufferSize();
@@ -429,9 +449,8 @@ int main() {
             .depth  = 1.0f,
         });
 
-        for (const auto &obj : scene.objects()) {
-            if (obj->render) obj->render->material.set("uShadowBias", shadowBias);
-        }
+        cubeMat.set("uShadowBias",  shadowBias);
+        floorMat.set("uShadowBias", shadowBias);
 
         const float aspect = fbSize.x > 0 && fbSize.y > 0
             ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)

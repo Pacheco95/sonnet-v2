@@ -8,10 +8,13 @@
 
 namespace sonnet::api::render {
 
-// Shared shader + render state used by multiple objects.
+// Shared shader, render state, and uniform defaults used by multiple objects.
+// defaultValues are uploaded before per-instance overrides so that instances
+// only need to set values that differ from the template.
 struct MaterialTemplate {
-    core::ShaderHandle shaderHandle{};
-    RenderState        renderState{};
+    core::ShaderHandle    shaderHandle{};
+    RenderState           renderState{};
+    core::UniformValueMap defaultValues{};
 };
 
 // Per-object uniform overrides applied on top of a MaterialTemplate.
