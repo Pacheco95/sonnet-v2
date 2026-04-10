@@ -3,11 +3,10 @@
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/input/InputSystem.h>
-#include <sonnet/loaders/ModelLoader.h>
-#include <sonnet/loaders/TextureLoader.h>
 #include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
+#include <sonnet/scene/SceneLoader.h>
 #include <sonnet/ui/ImGuiLayer.h>
 #include <sonnet/window/GLFWInputAdapter.h>
 #include <sonnet/window/GLFWWindow.h>
@@ -219,47 +218,13 @@ int main() {
 
     sonnet::renderer::frontend::Renderer renderer{backend};
 
-    // Load mesh from OBJ via ModelLoader.
-    const auto loadedMeshes = sonnet::loaders::ModelLoader::load(DEMO_ASSETS_DIR "/cube.obj");
-    const auto meshHandle   = renderer.createMesh(loadedMeshes[0]);
+    // ── Lit shader and material template ─────────────────────────────────────
     const auto shaderHandle = renderer.createShader(VERT_SRC, FRAG_SRC);
-
-    const auto matHandle = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+    const auto matHandle    = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle  = shaderHandle,
         .renderState   = {},
         .defaultValues = {{"uShadowBias", 0.005f}},
     });
-
-    // Load checkerboard texture via TextureLoader.
-    const auto cpuTex  = sonnet::loaders::TextureLoader::load(DEMO_ASSETS_DIR "/checkerboard.png");
-    const auto texDesc = sonnet::api::render::TextureDesc{
-        .size       = {cpuTex.width, cpuTex.height},
-        .format     = cpuTex.channels == 4 ? sonnet::api::render::TextureFormat::RGBA8
-                                           : sonnet::api::render::TextureFormat::RGB8,
-        .colorSpace = sonnet::api::render::ColorSpace::sRGB,
-    };
-    const auto texHandle = renderer.createTexture(texDesc, {}, cpuTex);
-
-    // Floor mesh — a thin wide box that receives the cube's shadow.
-    const auto floorMeshHandle = renderer.createMesh(sonnet::primitives::makeBox({6.0f, 0.1f, 6.0f}));
-
-    // Solid light-gray 1×1 texture for the floor — demonstrates per-instance albedo override.
-    static constexpr std::byte kGray[] = {std::byte{180}, std::byte{180}, std::byte{180}};
-    const auto floorTexHandle = renderer.createTexture(
-        sonnet::api::render::TextureDesc{
-            .size       = {1, 1},
-            .format     = sonnet::api::render::TextureFormat::RGB8,
-            .colorSpace = sonnet::api::render::ColorSpace::sRGB,
-            .useMipmaps = false,
-        },
-        {},
-        sonnet::api::render::CPUTextureBuffer{
-            .width    = 1,
-            .height   = 1,
-            .channels = 3,
-            .texels   = sonnet::core::Texels{kGray, std::size(kGray)},
-        }
-    );
 
     // ── Shadow map render target (depth texture, no colour) ───────────────────
     constexpr std::uint32_t SHADOW_SIZE = 2048;
@@ -280,7 +245,7 @@ int main() {
     });
     const auto shadowDepthHandle = renderer.depthTextureHandle(shadowRTHandle);
 
-    // Shadow-pass shader and material.
+    // ── Shadow-pass shader and material ───────────────────────────────────────
     const auto shadowShader  = renderer.createShader(SHADOW_VERT, SHADOW_FRAG);
     const auto shadowMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = shadowShader,
@@ -288,36 +253,23 @@ int main() {
     });
     sonnet::api::render::MaterialInstance shadowMat{shadowMatTmpl};
 
-    // Scene setup.
+    // ── Scene — loaded from JSON ───────────────────────────────────────────────
     sonnet::world::Scene scene;
+    sonnet::scene::SceneLoader sceneLoader;
+    sceneLoader.registerMaterial("lit",        matHandle);
+    sceneLoader.registerTexture("shadowDepth", shadowDepthHandle);
+    const auto objects = sceneLoader.load(
+        DEMO_ASSETS_DIR "/scene.json",
+        DEMO_ASSETS_DIR,
+        scene,
+        renderer);
 
-    // "Arm" is an invisible pivot at the origin. Rotating it sweeps the cube
-    // in an orbit — a simple demonstration of parent-child transforms.
-    auto &arm = scene.createObject("Arm");
-
-    // Cube: checkerboard albedo.
-    auto &cube = scene.createObject("Cube", &arm);
-    cube.transform.setLocalPosition({1.5f, 0.0f, 0.0f});
-    {
-        sonnet::api::render::MaterialInstance m{matHandle};
-        m.addTexture("uAlbedo",    texHandle);
-        m.addTexture("uShadowMap", shadowDepthHandle);
-        cube.render = sonnet::world::RenderComponent{.mesh = meshHandle, .material = std::move(m)};
-    }
-
-    // Floor: solid light-gray albedo — same template, different per-instance texture.
-    auto &floor = scene.createObject("Floor");
-    floor.transform.setLocalPosition({0.0f, -0.8f, 0.0f});
-    {
-        sonnet::api::render::MaterialInstance m{matHandle};
-        m.addTexture("uAlbedo",    floorTexHandle);
-        m.addTexture("uShadowMap", shadowDepthHandle);
-        floor.render = sonnet::world::RenderComponent{.mesh = floorMeshHandle, .material = std::move(m)};
-    }
-
-    // Named material refs for per-frame uniform updates (e.g. shadow bias slider).
-    auto &cubeMat  = cube.render->material;
-    auto &floorMat = floor.render->material;
+    auto &arm       = *objects.at("Arm");
+    auto &cube      = *objects.at("Cube");
+    auto &floor     = *objects.at("Floor");
+    auto &cameraObj = *objects.at("Camera");
+    auto &cubeMat   = cube.render->material;
+    auto &floorMat  = floor.render->material;
 
     // ── HDR render target ─────────────────────────────────────────────────────
     const auto fbSize0    = window.getFrameBufferSize();
@@ -352,13 +304,6 @@ int main() {
     sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
     tonemapMat.addTexture("uHdrColor", hdrTexHandle);
 
-    // ── Camera ────────────────────────────────────────────────────────────────
-    auto &cameraObj = scene.createObject("Camera");
-    cameraObj.camera = sonnet::world::CameraComponent{
-        .fov  = 60.0f,
-        .near = 0.1f,
-        .far  = 200.0f,
-    };
     FlyCamera flyCamera{cameraObj.transform};
 
     // Tweakable state exposed via ImGui.

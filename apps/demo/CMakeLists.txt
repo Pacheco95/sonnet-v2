@@ -3,7 +3,7 @@ add_executable(demo main.cpp)
 target_link_libraries(demo PRIVATE
     sonnet::renderer::frontend
     sonnet::primitives
-    sonnet::loaders
+    sonnet::scene
     sonnet::world
     sonnet::ui
     imgui::imgui

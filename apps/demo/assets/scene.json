@@ -1,0 +1,47 @@
+{
+    "assets": {
+        "meshes": {
+            "cube":  "cube.obj",
+            "floor": { "primitive": "box", "size": [6.0, 0.1, 6.0] }
+        },
+        "textures": {
+            "checkerboard": "checkerboard.png",
+            "gray":         { "color": [180, 180, 180] }
+        }
+    },
+    "objects": [
+        {
+            "name": "Arm"
+        },
+        {
+            "name":     "Cube",
+            "parent":   "Arm",
+            "position": [1.5, 0.0, 0.0],
+            "render": {
+                "mesh":     "cube",
+                "material": "lit",
+                "textures": {
+                    "uAlbedo":    "checkerboard",
+                    "uShadowMap": "shadowDepth"
+                }
+            }
+        },
+        {
+            "name":     "Floor",
+            "position": [0.0, -0.8, 0.0],
+            "render": {
+                "mesh":     "floor",
+                "material": "lit",
+                "textures": {
+                    "uAlbedo":    "gray",
+                    "uShadowMap": "shadowDepth"
+                }
+            }
+        },
+        {
+            "name":     "Camera",
+            "position": [0.0, 0.0, 3.0],
+            "camera":   { "fov": 60.0, "near": 0.1, "far": 200.0 }
+        }
+    ]
+}
