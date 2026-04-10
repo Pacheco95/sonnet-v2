@@ -151,55 +151,55 @@ void main() {
 )glsl";
 
 // ── Fly camera ────────────────────────────────────────────────────────────────
+// Input controller that drives a Transform. Projection parameters live in the
+// CameraComponent on the same GameObject — this class owns neither.
 
 class FlyCamera {
 public:
-    FlyCamera() { update(0.0f, {}, {}); }
+    explicit FlyCamera(sonnet::world::Transform &transform) : m_transform(transform) {
+        m_transform.setLocalPosition({0.0f, 0.0f, 3.0f});
+        applyOrientation();
+    }
 
-    void update(float dt,
-                const sonnet::input::InputSystem &input,
-                const glm::uvec2 &viewport) {
+    void update(float dt, const sonnet::input::InputSystem &input) {
         using sonnet::api::input::Key;
 
         const glm::vec2 delta = input.mouseDelta();
         m_yaw   += delta.x * m_sensitivity;
         m_pitch  = std::clamp(m_pitch - delta.y * m_sensitivity, -89.0f, 89.0f);
+        applyOrientation();
 
+        const glm::vec3 front = m_transform.forward();
+        const glm::vec3 right = m_transform.right();
+        const float     speed = m_speed * dt;
+
+        glm::vec3 pos = m_transform.getLocalPosition();
+        if (input.isKeyDown(Key::W)) pos += front    * speed;
+        if (input.isKeyDown(Key::S)) pos -= front    * speed;
+        if (input.isKeyDown(Key::D)) pos += right    * speed;
+        if (input.isKeyDown(Key::A)) pos -= right    * speed;
+        if (input.isKeyDown(Key::E)) pos += WORLD_UP * speed;
+        if (input.isKeyDown(Key::Q)) pos -= WORLD_UP * speed;
+        m_transform.setLocalPosition(pos);
+    }
+
+private:
+    static constexpr glm::vec3 WORLD_UP{0.0f, 1.0f, 0.0f};
+
+    void applyOrientation() {
         const float yr = glm::radians(m_yaw);
         const float pr = glm::radians(m_pitch);
-        m_front = glm::normalize(glm::vec3{
+        const glm::vec3 front = glm::normalize(glm::vec3{
             std::cos(yr) * std::cos(pr),
             std::sin(pr),
             std::sin(yr) * std::cos(pr),
         });
-        const glm::vec3 right = glm::normalize(glm::cross(m_front, WORLD_UP));
-
-        const float speed = m_speed * dt;
-        if (input.isKeyDown(Key::W)) m_pos += m_front  * speed;
-        if (input.isKeyDown(Key::S)) m_pos -= m_front  * speed;
-        if (input.isKeyDown(Key::D)) m_pos += right     * speed;
-        if (input.isKeyDown(Key::A)) m_pos -= right     * speed;
-        if (input.isKeyDown(Key::E)) m_pos += WORLD_UP * speed;
-        if (input.isKeyDown(Key::Q)) m_pos -= WORLD_UP * speed;
-
-        m_view = glm::lookAt(m_pos, m_pos + m_front, WORLD_UP);
-        const float aspect = viewport.x > 0 && viewport.y > 0
-            ? static_cast<float>(viewport.x) / static_cast<float>(viewport.y)
-            : 16.0f / 9.0f;
-        m_proj = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 200.0f);
+        m_transform.setLocalRotation(glm::quatLookAt(front, WORLD_UP));
     }
 
-    [[nodiscard]] const glm::mat4 &view() const { return m_view; }
-    [[nodiscard]] const glm::mat4 &proj() const { return m_proj; }
-    [[nodiscard]] const glm::vec3 &pos()  const { return m_pos; }
-
-private:
-    static constexpr glm::vec3 WORLD_UP{0, 1, 0};
-    glm::vec3 m_pos{0.0f, 0.0f, 3.0f};
-    float     m_yaw{-90.0f}, m_pitch{0.0f};
-    float     m_speed{5.0f}, m_sensitivity{0.1f};
-    glm::vec3 m_front{0, 0, -1};
-    glm::mat4 m_view{1.0f}, m_proj{1.0f};
+    sonnet::world::Transform &m_transform;
+    float m_yaw{-90.0f}, m_pitch{0.0f};
+    float m_speed{5.0f}, m_sensitivity{0.1f};
 };
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -332,6 +332,15 @@ int main() {
     sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
     tonemapMat.addTexture("uHdrColor", hdrTexHandle);
 
+    // ── Camera ────────────────────────────────────────────────────────────────
+    auto &cameraObj = scene.createObject("Camera");
+    cameraObj.camera = sonnet::world::CameraComponent{
+        .fov  = 60.0f,
+        .near = 0.1f,
+        .far  = 200.0f,
+    };
+    FlyCamera flyCamera{cameraObj.transform};
+
     // Tweakable state exposed via ImGui.
     float     rotationSpeed  = 45.0f;
     glm::vec3 lightDir       = {0.6f, 1.0f, 0.4f};
@@ -341,7 +350,6 @@ int main() {
     float     shadowBias     = 0.005f;
     bool      uiMode         = false;
 
-    FlyCamera camera;
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
 
@@ -364,7 +372,7 @@ int main() {
         const auto fbSize = window.getFrameBufferSize();
 
         if (!uiMode)
-            camera.update(dt, input, fbSize);
+            flyCamera.update(dt, input);
 
         rotation += rotationSpeed * dt;
         // Arm orbits around Y — the cube follows as a child.
@@ -425,10 +433,17 @@ int main() {
             if (obj->render) obj->render->material.set("uShadowBias", shadowBias);
         }
 
+        const float aspect = fbSize.x > 0 && fbSize.y > 0
+            ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
+            : 16.0f / 9.0f;
+        const glm::mat4 viewMat = cameraObj.camera->viewMatrix(cameraObj.transform);
+        const glm::mat4 projMat = cameraObj.camera->projectionMatrix(aspect);
+        const glm::vec3 camPos  = cameraObj.transform.getWorldPosition();
+
         sonnet::api::render::FrameContext ctx{
-            .viewMatrix       = camera.view(),
-            .projectionMatrix = camera.proj(),
-            .viewPosition     = camera.pos(),
+            .viewMatrix       = viewMat,
+            .projectionMatrix = projMat,
+            .viewPosition     = camPos,
             .viewportWidth    = fbSize.x,
             .viewportHeight   = fbSize.y,
             .deltaTime        = dt,
@@ -497,7 +512,7 @@ int main() {
             }
 
             if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-                const glm::vec3 &p = camera.pos();
+                const glm::vec3 p = cameraObj.transform.getWorldPosition();
                 ImGui::Text("Position  %.2f  %.2f  %.2f", p.x, p.y, p.z);
                 ImGui::Text("%.1f FPS", ImGui::GetIO().Framerate);
             }

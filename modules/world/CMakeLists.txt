@@ -17,4 +17,5 @@ target_link_libraries(sonnet_world PUBLIC
 sonnet_add_module_test(sonnet_world
     tests/TransformTests.cpp
     tests/SceneTests.cpp
+    tests/CameraTests.cpp
 )
