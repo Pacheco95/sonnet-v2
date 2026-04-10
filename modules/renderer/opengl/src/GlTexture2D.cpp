@@ -81,6 +81,11 @@ void GlTexture2D::applySamplerState() const {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     static_cast<GLint>(toGlWrap(m_samplerDesc.wrapT)));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(toGlMinFilter(m_samplerDesc.minFilter)));
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(toGlMagFilter(m_samplerDesc.magFilter)));
+
+    if (m_samplerDesc.depthCompare) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    }
 }
 
 } // namespace sonnet::renderer::opengl

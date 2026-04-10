@@ -42,6 +42,11 @@ struct SamplerDesc {
     TextureWrap wrapS   = TextureWrap::Repeat;
     TextureWrap wrapT   = TextureWrap::Repeat;
     TextureWrap wrapR   = TextureWrap::Repeat;
+    // When true, the texture is a shadow sampler (sampler2DShadow).
+    // The backend sets GL_TEXTURE_COMPARE_MODE = GL_COMPARE_REF_TO_TEXTURE
+    // and GL_TEXTURE_COMPARE_FUNC = GL_LEQUAL so that texture() returns a
+    // hardware-filtered [0,1] shadow factor rather than a raw depth value.
+    bool depthCompare   = false;
 
     bool operator==(const SamplerDesc &) const = default;
 

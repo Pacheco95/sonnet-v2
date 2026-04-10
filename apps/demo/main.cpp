@@ -84,10 +84,12 @@ struct DirLight {
 };
 uniform DirLight  uDirLight;
 uniform sampler2D uAlbedo;
-uniform sampler2D uShadowMap;
-uniform float     uShadowBias;
+uniform sampler2DShadow uShadowMap;
+uniform float           uShadowBias;
 
-// 3×3 PCF shadow factor
+// 3×3 PCF shadow factor using hardware depth comparison.
+// Each texture() call on a sampler2DShadow returns a bilinearly filtered
+// [0,1] result: 1.0 = lit, 0.0 = occluded.
 float shadowFactor(vec3 n) {
     vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
     proj = proj * 0.5 + 0.5;
@@ -101,8 +103,7 @@ float shadowFactor(vec3 n) {
     float shadow = 0.0;
     for (int x = -1; x <= 1; ++x)
         for (int y = -1; y <= 1; ++y) {
-            float closest = texture(uShadowMap, proj.xy + vec2(x, y) * texelSize).r;
-            shadow += proj.z - bias > closest ? 0.0 : 1.0;
+            shadow += texture(uShadowMap, vec3(proj.xy + vec2(x, y) * texelSize, proj.z - bias));
         }
     return shadow / 9.0;
 }
@@ -250,10 +251,11 @@ int main() {
         .depth  = sonnet::api::render::TextureAttachmentDesc{
             .format      = sonnet::api::render::TextureFormat::Depth24,
             .samplerDesc = {
-                .minFilter = sonnet::api::render::MinFilter::Nearest,
-                .magFilter = sonnet::api::render::MagFilter::Nearest,
-                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
-                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+                .minFilter    = sonnet::api::render::MinFilter::Linear,
+                .magFilter    = sonnet::api::render::MagFilter::Linear,
+                .wrapS        = sonnet::api::render::TextureWrap::ClampToEdge,
+                .wrapT        = sonnet::api::render::TextureWrap::ClampToEdge,
+                .depthCompare = true,
             },
         },
     });
