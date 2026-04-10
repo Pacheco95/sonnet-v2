@@ -11,6 +11,8 @@ target_link_libraries(demo PRIVATE
     sonnet::window
     sonnet::input
     glm::glm
+    glad
+    stb::image
 )
 
 # Bake the source-tree assets path into the binary so the demo can always find

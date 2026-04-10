@@ -106,6 +106,12 @@ GPUTextureHandle Renderer::colorTextureHandle(RenderTargetHandle handle, std::si
 
 // ── IRenderer ──────────────────────────────────────────────────────────────────
 
+GPUTextureHandle Renderer::registerRawTexture(std::unique_ptr<ITexture> tex) {
+    GPUTextureHandle handle{m_nextId++};
+    m_textures.emplace(handle, std::move(tex));
+    return handle;
+}
+
 void Renderer::beginFrame() {
     m_backend.beginFrame();
 }

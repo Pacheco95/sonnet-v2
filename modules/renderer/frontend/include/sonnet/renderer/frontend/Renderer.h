@@ -37,6 +37,8 @@ public:
     [[nodiscard]] core::GPUTextureHandle         colorTextureHandle(core::RenderTargetHandle handle,
                                                                     std::size_t colorIndex = 0);
     [[nodiscard]] core::GPUTextureHandle         depthTextureHandle(core::RenderTargetHandle handle);
+    // Register an externally-created ITexture (e.g. IBL cubemaps) and return a handle.
+    [[nodiscard]] core::GPUTextureHandle         registerRawTexture(std::unique_ptr<api::render::ITexture> tex);
 
     // ── IRenderer ─────────────────────────────────────────────────────────────
     void beginFrame() override;

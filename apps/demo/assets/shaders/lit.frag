@@ -23,8 +23,12 @@ uniform sampler2D       uNormalMap;
 uniform sampler2D       uORM;
 uniform sampler2DShadow uShadowMap;
 uniform float           uShadowBias;
-uniform float           uMetallic;   // multiplied on top of uORM.b
-uniform float           uRoughness;  // multiplied on top of uORM.g
+uniform float           uMetallic;          // multiplied on top of uORM.b
+uniform float           uRoughness;         // multiplied on top of uORM.g
+uniform samplerCube     uIrradianceMap;     // diffuse IBL
+uniform samplerCube     uPrefilteredMap;    // specular IBL (mipped by roughness)
+uniform sampler2D       uBRDFLUT;           // GGX split-sum LUT
+uniform float           uMaxPrefilteredLOD; // mip count - 1 in uPrefilteredMap
 
 // ── GGX Cook-Torrance BRDF ────────────────────────────────────────────────────
 
@@ -106,8 +110,23 @@ void main() {
 
     vec3 Lo = (diffuse + specular) * radiance * NdotL * shadow;
 
-    // Ambient with occlusion (no IBL yet)
-    vec3 ambient = vec3(0.03) * albedo * ao;
+    // ── IBL ambient (split-sum approximation) ─────────────────────────────────
+    // Fresnel at grazing angle (use NdotV, not HdotV, for the ambient term).
+    vec3 F_amb = F_Schlick(NdotV, F0);
+
+    // Diffuse IBL: irradiance map × kd × albedo
+    vec3 kd_amb     = (vec3(1.0) - F_amb) * (1.0 - metallic);
+    vec3 irradiance = texture(uIrradianceMap, N).rgb;
+    vec3 diffuseIBL = kd_amb * irradiance * albedo;
+
+    // Specular IBL: pre-filtered env × (F0 * scale + bias) from BRDF LUT
+    vec3 R               = reflect(-V, N);
+    vec3 prefilteredColor = textureLod(uPrefilteredMap, R,
+                                       roughness * uMaxPrefilteredLOD).rgb;
+    vec2 brdf            = texture(uBRDFLUT, vec2(NdotV, roughness)).rg;
+    vec3 specularIBL     = prefilteredColor * (F_amb * brdf.x + brdf.y);
+
+    vec3 ambient = (diffuseIBL + specularIBL) * ao;
 
     fragColor = vec4(ambient + Lo, 1.0);
 }

@@ -1,5 +1,7 @@
-// Sonnet v2 — Phase 22 demo
-// Shadow map -> HDR offscreen pass -> ACES tone-mapping -> default framebuffer; ImGui debug panel (Tab).
+// Sonnet v2 — Phase 25+26 demo
+// Shadow map -> HDR offscreen pass (skybox + lit geometry) -> ACES tone-mapping; ImGui debug panel.
+
+#include "IBL.h"
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/input/InputSystem.h>
@@ -120,6 +122,12 @@ int main() {
     });
     sonnet::api::render::MaterialInstance shadowMat{shadowMatTmpl};
 
+    // ── IBL — bake irradiance, pre-filtered specular, BRDF LUT ───────────────
+    const IBLMaps ibl = buildIBL(
+        renderer,
+        DEMO_ASSETS_DIR "/kloppenheim_06_1k.hdr",
+        DEMO_ASSETS_DIR "/shaders");
+
     // ── Scene — loaded from JSON (shaders + materials + meshes + objects) ─────
     sonnet::world::Scene scene;
     sonnet::scene::SceneLoader sceneLoader;
@@ -136,6 +144,15 @@ int main() {
     auto &cameraObj = *loaded.objects.at("Camera");
     auto &cubeMat   = cube.render->material;
     auto &floorMat  = floor.render->material;
+
+    // Attach IBL textures to every lit material instance.
+    const float maxLOD = static_cast<float>(ibl.prefilteredLODs - 1);
+    for (auto *mat : {&cubeMat, &floorMat}) {
+        mat->addTexture("uIrradianceMap",  ibl.irradianceHandle);
+        mat->addTexture("uPrefilteredMap", ibl.prefilteredHandle);
+        mat->addTexture("uBRDFLUT",        ibl.brdfLUTHandle);
+        mat->set("uMaxPrefilteredLOD", maxLOD);
+    }
 
     // ── HDR render target ─────────────────────────────────────────────────────
     const auto fbSize0    = window.getFrameBufferSize();
@@ -171,6 +188,22 @@ int main() {
     });
     sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
     tonemapMat.addTexture("uHdrColor", hdrTexHandle);
+
+    // ── Skybox ────────────────────────────────────────────────────────────────
+    const auto skyVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.vert");
+    const auto skyFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.frag");
+    const auto skyShader  = renderer.createShader(skyVertSrc, skyFragSrc);
+    const auto skyMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = skyShader,
+        .renderState  = {
+            .depthTest  = true,
+            .depthWrite = false,
+            .depthFunc  = sonnet::api::render::DepthFunction::LessEqual,
+            .cull       = sonnet::api::render::CullMode::None,
+        },
+    });
+    sonnet::api::render::MaterialInstance skyMat{skyMatTmpl};
+    skyMat.addTexture("uEnvMap", ibl.equirectHandle);
 
     FlyCamera flyCamera{cameraObj.transform};
 
@@ -301,8 +334,16 @@ int main() {
         std::vector<sonnet::api::render::RenderItem> queue;
         scene.buildRenderQueue(queue);
 
+        // ── Skybox item (drawn at depth=1.0 using LessEqual depth test) ──────
+        std::vector<sonnet::api::render::RenderItem> skyQueue{{
+            .mesh        = quadMeshHandle,
+            .material    = skyMat,
+            .modelMatrix = glm::mat4{1.0f},
+        }};
+
         renderer.beginFrame();
-        renderer.render(ctx, queue);
+        renderer.render(ctx, queue);      // opaque geometry first
+        renderer.render(ctx, skyQueue);   // sky fills depth=1.0 regions
         renderer.endFrame();
 
         // ── Pass 3: tone-map HDR -> default framebuffer ───────────────────────
