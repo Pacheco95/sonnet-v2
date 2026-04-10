@@ -1,4 +1,5 @@
 add_library(sonnet_loaders STATIC
+    src/ShaderLoader.cpp
     src/TextureLoader.cpp
     src/ModelLoader.cpp
 )

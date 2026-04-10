@@ -1,8 +1,9 @@
-// Sonnet v2 — Phase 17 demo
-// Shadow map → HDR offscreen pass → ACES tone-mapping → default framebuffer; ImGui debug panel (Tab).
+// Sonnet v2 — Phase 22 demo
+// Shadow map -> HDR offscreen pass -> ACES tone-mapping -> default framebuffer; ImGui debug panel (Tab).
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/input/InputSystem.h>
+#include <sonnet/loaders/ShaderLoader.h>
 #include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
@@ -20,134 +21,6 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
-
-// ── Shadow-map pass shaders ───────────────────────────────────────────────────
-
-static constexpr const char *SHADOW_VERT = R"glsl(
-#version 330 core
-layout(location = 0) in vec3 aPosition;
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
-void main() {
-    gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
-}
-)glsl";
-
-static constexpr const char *SHADOW_FRAG = R"glsl(
-#version 330 core
-void main() {}
-)glsl";
-
-// ── Scene shaders (lit + shadow) ──────────────────────────────────────────────
-// Vertex layout: position(0), texcoord(2), normal(3)
-
-static constexpr const char *VERT_SRC = R"glsl(
-#version 330 core
-layout(location = 0) in vec3 aPosition;
-layout(location = 2) in vec2 aTexCoord;
-layout(location = 3) in vec3 aNormal;
-
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
-uniform mat4 uLightSpaceMatrix;
-
-out vec3 vNormal;
-out vec3 vFragPos;
-out vec2 vTexCoord;
-out vec4 vLightSpacePos;
-
-void main() {
-    vec4 worldPos    = uModel * vec4(aPosition, 1.0);
-    gl_Position      = uProjection * uView * worldPos;
-    vFragPos         = worldPos.xyz;
-    vNormal          = mat3(transpose(inverse(uModel))) * aNormal;
-    vTexCoord        = aTexCoord;
-    vLightSpacePos   = uLightSpaceMatrix * worldPos;
-}
-)glsl";
-
-static constexpr const char *FRAG_SRC = R"glsl(
-#version 330 core
-in  vec3 vNormal;
-in  vec3 vFragPos;
-in  vec2 vTexCoord;
-in  vec4 vLightSpacePos;
-out vec4 fragColor;
-
-struct DirLight {
-    vec3  direction;
-    vec3  color;
-    float intensity;
-};
-uniform DirLight  uDirLight;
-uniform sampler2D uAlbedo;
-uniform sampler2DShadow uShadowMap;
-uniform float           uShadowBias;
-
-// 3×3 PCF shadow factor using hardware depth comparison.
-// Each texture() call on a sampler2DShadow returns a bilinearly filtered
-// [0,1] result: 1.0 = lit, 0.0 = occluded.
-float shadowFactor(vec3 n) {
-    vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
-    proj = proj * 0.5 + 0.5;
-    // Outside the shadow frustum → fully lit
-    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 ||
-                        proj.y < 0.0 || proj.y > 1.0)
-        return 1.0;
-    float bias = max(uShadowBias * (1.0 - dot(n, normalize(uDirLight.direction))),
-                     uShadowBias * 0.1);
-    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
-    float shadow = 0.0;
-    for (int x = -1; x <= 1; ++x)
-        for (int y = -1; y <= 1; ++y) {
-            shadow += texture(uShadowMap, vec3(proj.xy + vec2(x, y) * texelSize, proj.z - bias));
-        }
-    return shadow / 9.0;
-}
-
-void main() {
-    vec3  n      = normalize(vNormal);
-    float diff   = max(dot(n, normalize(uDirLight.direction)), 0.0);
-    vec3  albedo = texture(uAlbedo, vTexCoord).rgb;
-    float shadow = shadowFactor(n);
-    vec3  col    = (0.15 + diff * uDirLight.intensity * shadow) * uDirLight.color * albedo;
-    fragColor    = vec4(col, 1.0);
-}
-)glsl";
-
-// ── Tone-mapping pass shaders ─────────────────────────────────────────────────
-
-static constexpr const char *TONEMAP_VERT = R"glsl(
-#version 330 core
-layout(location = 0) in vec3 aPosition;
-layout(location = 2) in vec2 aTexCoord;
-out vec2 vUV;
-void main() {
-    gl_Position = vec4(aPosition.xy, 0.0, 1.0);
-    vUV = aTexCoord;
-}
-)glsl";
-
-static constexpr const char *TONEMAP_FRAG = R"glsl(
-#version 330 core
-in  vec2 vUV;
-out vec4 fragColor;
-uniform sampler2D uHdrColor;
-uniform float     uExposure;
-
-// ACES filmic tone-mapping approximation (Krzysztof Narkowicz)
-vec3 aces(vec3 x) {
-    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
-
-void main() {
-    vec3 hdr    = texture(uHdrColor, vUV).rgb * uExposure;
-    fragColor   = vec4(aces(hdr), 1.0);
-}
-)glsl";
 
 // ── Fly camera ────────────────────────────────────────────────────────────────
 // Input controller that drives a Transform. Projection parameters live in the
@@ -218,14 +91,6 @@ int main() {
 
     sonnet::renderer::frontend::Renderer renderer{backend};
 
-    // ── Lit shader and material template ─────────────────────────────────────
-    const auto shaderHandle = renderer.createShader(VERT_SRC, FRAG_SRC);
-    const auto matHandle    = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
-        .shaderHandle  = shaderHandle,
-        .renderState   = {},
-        .defaultValues = {{"uShadowBias", 0.005f}},
-    });
-
     // ── Shadow map render target (depth texture, no colour) ───────────────────
     constexpr std::uint32_t SHADOW_SIZE = 2048;
     const auto shadowRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
@@ -246,28 +111,29 @@ int main() {
     const auto shadowDepthHandle = renderer.depthTextureHandle(shadowRTHandle);
 
     // ── Shadow-pass shader and material ───────────────────────────────────────
-    const auto shadowShader  = renderer.createShader(SHADOW_VERT, SHADOW_FRAG);
-    const auto shadowMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+    const auto shadowVertSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/shadow.vert");
+    const auto shadowFragSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/shadow.frag");
+    const auto shadowShader   = renderer.createShader(shadowVertSrc, shadowFragSrc);
+    const auto shadowMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = shadowShader,
         .renderState  = {},
     });
     sonnet::api::render::MaterialInstance shadowMat{shadowMatTmpl};
 
-    // ── Scene — loaded from JSON ───────────────────────────────────────────────
+    // ── Scene — loaded from JSON (shaders + materials + meshes + objects) ─────
     sonnet::world::Scene scene;
     sonnet::scene::SceneLoader sceneLoader;
-    sceneLoader.registerMaterial("lit",        matHandle);
     sceneLoader.registerTexture("shadowDepth", shadowDepthHandle);
-    const auto objects = sceneLoader.load(
+    const auto loaded = sceneLoader.load(
         DEMO_ASSETS_DIR "/scene.json",
         DEMO_ASSETS_DIR,
         scene,
         renderer);
 
-    auto &arm       = *objects.at("Arm");
-    auto &cube      = *objects.at("Cube");
-    auto &floor     = *objects.at("Floor");
-    auto &cameraObj = *objects.at("Camera");
+    auto &arm       = *loaded.objects.at("Arm");
+    auto &cube      = *loaded.objects.at("Cube");
+    auto &floor     = *loaded.objects.at("Floor");
+    auto &cameraObj = *loaded.objects.at("Camera");
     auto &cubeMat   = cube.render->material;
     auto &floorMat  = floor.render->material;
 
@@ -292,13 +158,15 @@ int main() {
     // ── Tone-mapping fullscreen quad ──────────────────────────────────────────
     const auto quadMesh       = sonnet::primitives::makeQuad({2.0f, 2.0f});
     const auto quadMeshHandle = renderer.createMesh(quadMesh);
-    const auto tonemapShader  = renderer.createShader(TONEMAP_VERT, TONEMAP_FRAG);
+    const auto tonemapVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/tonemap.vert");
+    const auto tonemapFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/tonemap.frag");
+    const auto tonemapShader  = renderer.createShader(tonemapVertSrc, tonemapFragSrc);
     const auto tonemapMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = tonemapShader,
         .renderState  = {
-            .depthTest = false,
+            .depthTest  = false,
             .depthWrite = false,
-            .cull = sonnet::api::render::CullMode::None,
+            .cull       = sonnet::api::render::CullMode::None,
         },
     });
     sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
@@ -426,7 +294,7 @@ int main() {
         renderer.render(ctx, queue);
         renderer.endFrame();
 
-        // ── Pass 3: tone-map HDR → default framebuffer ────────────────────────
+        // ── Pass 3: tone-map HDR -> default framebuffer ───────────────────────
         backend.bindDefaultRenderTarget();
         backend.setViewport(fbSize.x, fbSize.y);
         backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
@@ -472,7 +340,7 @@ int main() {
             }
 
             if (ImGui::CollapsingHeader("Object", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Rotation speed (°/s)", &rotationSpeed, 0.0f, 360.0f);
+                ImGui::SliderFloat("Rotation speed (deg/s)", &rotationSpeed, 0.0f, 360.0f);
             }
 
             if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {

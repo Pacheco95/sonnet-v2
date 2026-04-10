@@ -11,16 +11,32 @@ namespace sonnet::renderer::frontend { class Renderer; }
 
 namespace sonnet::scene {
 
+// Result of a scene load: scene-graph objects and named material templates
+// created from the JSON's assets.materials section.
+struct LoadedScene {
+    std::unordered_map<std::string, world::GameObject *>           objects;
+    std::unordered_map<std::string, core::MaterialTemplateHandle>  materials;
+};
+
 // Loads a scene from a JSON file or string.
 //
-// Named materials and runtime textures (e.g. shadow map render target outputs)
-// must be registered before calling load() so the scene file can reference
-// them by name.
+// Runtime textures that cannot be created from files (e.g. render-target
+// outputs such as shadow maps) must be registered before calling load() so
+// the scene file can reference them by name.
 //
 // JSON schema
 // ──────────────────────────────────────────────────────────────
 // {
 //   "assets": {
+//     "shaders": {
+//       "name": { "vert": "shaders/file.vert", "frag": "shaders/file.frag" }
+//     },
+//     "materials": {
+//       "name": {
+//         "shader": "shaderName",
+//         "defaultValues": { "uUniform": 0.005 }  // float, [x,y], [x,y,z], [x,y,z,w]
+//       }
+//     },
 //     "meshes": {
 //       "name": "path/to/file.obj",
 //       "name": { "primitive": "box",  "size": [w, h, d] },
@@ -28,7 +44,7 @@ namespace sonnet::scene {
 //     },
 //     "textures": {
 //       "name": "path/to/texture.png",
-//       "name": { "color": [r, g, b] }     // solid 1×1, values 0-255
+//       "name": { "color": [r, g, b] }     // solid 1x1, values 0-255
 //     }
 //   },
 //   "objects": [
@@ -49,30 +65,24 @@ namespace sonnet::scene {
 // }
 class SceneLoader {
 public:
-    using ObjectMap = std::unordered_map<std::string, world::GameObject *>;
-
-    // Pre-register a named material template for scene file references.
-    void registerMaterial(const std::string &name, core::MaterialTemplateHandle handle);
-
     // Pre-register a named texture for scene file references (e.g. render target outputs).
     void registerTexture(const std::string &name, core::GPUTextureHandle handle);
 
     // Load from a JSON file. Relative asset paths are resolved from assetsDir.
-    ObjectMap load(const std::string &sceneFile,
-                   const std::string &assetsDir,
-                   world::Scene &scene,
-                   renderer::frontend::Renderer &renderer);
+    LoadedScene load(const std::string &sceneFile,
+                     const std::string &assetsDir,
+                     world::Scene &scene,
+                     renderer::frontend::Renderer &renderer);
 
     // Load from a JSON string. When renderer is null, asset loading and render
     // component assignment are skipped — useful for unit tests.
-    ObjectMap loadFromString(const std::string &json,
-                             const std::string &assetsDir,
-                             world::Scene &scene,
-                             renderer::frontend::Renderer *renderer = nullptr);
+    LoadedScene loadFromString(const std::string &json,
+                               const std::string &assetsDir,
+                               world::Scene &scene,
+                               renderer::frontend::Renderer *renderer = nullptr);
 
 private:
-    std::unordered_map<std::string, core::MaterialTemplateHandle> m_materials;
-    std::unordered_map<std::string, core::GPUTextureHandle>       m_textures;
+    std::unordered_map<std::string, core::GPUTextureHandle> m_textures;
 };
 
 } // namespace sonnet::scene

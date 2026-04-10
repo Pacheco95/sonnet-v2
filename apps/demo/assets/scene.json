@@ -1,5 +1,14 @@
 {
     "assets": {
+        "shaders": {
+            "lit": { "vert": "shaders/lit.vert", "frag": "shaders/lit.frag" }
+        },
+        "materials": {
+            "lit": {
+                "shader": "lit",
+                "defaultValues": { "uShadowBias": 0.005 }
+            }
+        },
         "meshes": {
             "cube":  "cube.obj",
             "floor": { "primitive": "box", "size": [6.0, 0.1, 6.0] }

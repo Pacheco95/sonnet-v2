@@ -4,6 +4,7 @@ target_link_libraries(demo PRIVATE
     sonnet::renderer::frontend
     sonnet::primitives
     sonnet::scene
+    sonnet::loaders
     sonnet::world
     sonnet::ui
     imgui::imgui

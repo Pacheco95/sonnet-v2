@@ -2,6 +2,7 @@
 
 #include <sonnet/api/render/Material.h>
 #include <sonnet/loaders/ModelLoader.h>
+#include <sonnet/loaders/ShaderLoader.h>
 #include <sonnet/loaders/TextureLoader.h>
 #include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
@@ -20,10 +21,6 @@ using namespace api::render;
 using json = nlohmann::json;
 
 // ── Registration ───────────────────────────────────────────────────────────────
-
-void SceneLoader::registerMaterial(const std::string &name, core::MaterialTemplateHandle handle) {
-    m_materials[name] = handle;
-}
 
 void SceneLoader::registerTexture(const std::string &name, core::GPUTextureHandle handle) {
     m_textures[name] = handle;
@@ -71,7 +68,7 @@ core::GPUTextureHandle loadTexture(const json &spec,
             }, {}, cpuTex);
     }
 
-    // Solid 1×1 color: { "color": [r, g, b] }  (values 0-255)
+    // Solid 1x1 color: { "color": [r, g, b] }  (values 0-255)
     auto c = spec.at("color");
     const std::byte pixel[] = {
         std::byte{c[0].get<std::uint8_t>()},
@@ -94,14 +91,30 @@ core::GPUTextureHandle loadTexture(const json &spec,
         });
 }
 
+// Parse a JSON value into a UniformValue. Supports float, vec2, vec3, vec4.
+core::UniformValue parseUniformValue(const json &v) {
+    if (v.is_number())
+        return v.get<float>();
+    if (v.is_array()) {
+        if (v.size() == 2)
+            return glm::vec2{v[0].get<float>(), v[1].get<float>()};
+        if (v.size() == 3)
+            return glm::vec3{v[0].get<float>(), v[1].get<float>(), v[2].get<float>()};
+        if (v.size() == 4)
+            return glm::vec4{v[0].get<float>(), v[1].get<float>(),
+                             v[2].get<float>(), v[3].get<float>()};
+    }
+    throw std::runtime_error("SceneLoader: unsupported defaultValue type in material");
+}
+
 } // anonymous namespace
 
 // ── Public load interface ──────────────────────────────────────────────────────
 
-SceneLoader::ObjectMap SceneLoader::load(const std::string &sceneFile,
-                                          const std::string &assetsDir,
-                                          world::Scene &scene,
-                                          renderer::frontend::Renderer &renderer) {
+LoadedScene SceneLoader::load(const std::string &sceneFile,
+                               const std::string &assetsDir,
+                               world::Scene &scene,
+                               renderer::frontend::Renderer &renderer) {
     std::ifstream f{sceneFile};
     if (!f)
         throw std::runtime_error("SceneLoader: cannot open '" + sceneFile + "'");
@@ -110,19 +123,54 @@ SceneLoader::ObjectMap SceneLoader::load(const std::string &sceneFile,
     return loadFromString(content, assetsDir, scene, &renderer);
 }
 
-SceneLoader::ObjectMap SceneLoader::loadFromString(const std::string &jsonStr,
-                                                    const std::string &assetsDir,
-                                                    world::Scene &scene,
-                                                    renderer::frontend::Renderer *renderer) {
+LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
+                                         const std::string &assetsDir,
+                                         world::Scene &scene,
+                                         renderer::frontend::Renderer *renderer) {
     const json doc = json::parse(jsonStr);
-    ObjectMap  result;
+    LoadedScene result;
 
     // ── Asset loading (skipped when renderer is null) ──────────────────────────
-    std::unordered_map<std::string, core::GPUMeshHandle>    meshes;
-    std::unordered_map<std::string, core::GPUTextureHandle> textures = m_textures;
+    std::unordered_map<std::string, core::GPUMeshHandle>             meshes;
+    std::unordered_map<std::string, core::GPUTextureHandle>          textures = m_textures;
+    std::unordered_map<std::string, core::ShaderHandle>              shaders;
+    std::unordered_map<std::string, core::MaterialTemplateHandle>    materials;
 
     if (renderer && doc.contains("assets")) {
         const auto &assets = doc["assets"];
+
+        if (assets.contains("shaders")) {
+            for (const auto &[name, spec] : assets["shaders"].items()) {
+                const std::string vertSrc = loaders::ShaderLoader::load(
+                    assetsDir + "/" + spec.at("vert").get<std::string>());
+                const std::string fragSrc = loaders::ShaderLoader::load(
+                    assetsDir + "/" + spec.at("frag").get<std::string>());
+                shaders[name] = renderer->createShader(vertSrc, fragSrc);
+            }
+        }
+
+        if (assets.contains("materials")) {
+            for (const auto &[name, spec] : assets["materials"].items()) {
+                const std::string shaderName = spec.at("shader");
+                auto shIt = shaders.find(shaderName);
+                if (shIt == shaders.end())
+                    throw std::runtime_error("SceneLoader: unknown shader '" + shaderName + "'");
+
+                core::UniformValueMap defaults;
+                if (spec.contains("defaultValues")) {
+                    for (const auto &[uname, uval] : spec["defaultValues"].items())
+                        defaults[uname] = parseUniformValue(uval);
+                }
+
+                const auto tmplHandle = renderer->createMaterial(MaterialTemplate{
+                    .shaderHandle  = shIt->second,
+                    .renderState   = {},
+                    .defaultValues = std::move(defaults),
+                });
+                materials[name]        = tmplHandle;
+                result.materials[name] = tmplHandle;
+            }
+        }
 
         if (assets.contains("meshes")) {
             for (const auto &[name, spec] : assets["meshes"].items())
@@ -144,12 +192,12 @@ SceneLoader::ObjectMap SceneLoader::loadFromString(const std::string &jsonStr,
 
         world::GameObject *parent = nullptr;
         if (spec.contains("parent")) {
-            auto it = result.find(spec["parent"].get<std::string>());
-            if (it != result.end()) parent = it->second;
+            auto it = result.objects.find(spec["parent"].get<std::string>());
+            if (it != result.objects.end()) parent = it->second;
         }
 
-        auto &obj   = scene.createObject(name, parent);
-        result[name] = &obj;
+        auto &obj          = scene.createObject(name, parent);
+        result.objects[name] = &obj;
 
         // Transform
         if (spec.contains("position")) {
@@ -182,9 +230,9 @@ SceneLoader::ObjectMap SceneLoader::loadFromString(const std::string &jsonStr,
             const auto &rc = spec["render"];
 
             auto meshIt = meshes.find(rc.at("mesh").get<std::string>());
-            auto matIt  = m_materials.find(rc.at("material").get<std::string>());
+            auto matIt  = materials.find(rc.at("material").get<std::string>());
 
-            if (meshIt != meshes.end() && matIt != m_materials.end()) {
+            if (meshIt != meshes.end() && matIt != materials.end()) {
                 MaterialInstance mat{matIt->second};
                 if (rc.contains("textures")) {
                     for (const auto &[uniform, texName] : rc["textures"].items()) {

@@ -28,12 +28,12 @@ TEST_CASE("SceneLoader: returns object map with correct pointers", "[scene_loade
     world::Scene     scene;
     scene::SceneLoader loader;
 
-    auto map = loader.loadFromString(R"({
+    auto loaded = loader.loadFromString(R"({
         "objects": [ { "name": "Node" } ]
     })", "", scene);
 
-    REQUIRE(map.count("Node") == 1);
-    REQUIRE(map.at("Node") == scene.objects()[0].get());
+    REQUIRE(loaded.objects.count("Node") == 1);
+    REQUIRE(loaded.objects.at("Node") == scene.objects()[0].get());
 }
 
 TEST_CASE("SceneLoader: applies position to transform", "[scene_loader]") {
