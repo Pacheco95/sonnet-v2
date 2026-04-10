@@ -20,6 +20,7 @@ struct FrameContext {
 
     std::optional<DirectionalLight> directionalLight;
     std::vector<PointLight>         pointLights;
+    std::optional<glm::mat4>        lightSpaceMatrix;
 };
 
 } // namespace sonnet::api::render

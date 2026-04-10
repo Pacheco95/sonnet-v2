@@ -36,6 +36,7 @@ public:
     // The handle is invalidated if the render target is destroyed.
     [[nodiscard]] core::GPUTextureHandle         colorTextureHandle(core::RenderTargetHandle handle,
                                                                     std::size_t colorIndex = 0);
+    [[nodiscard]] core::GPUTextureHandle         depthTextureHandle(core::RenderTargetHandle handle);
 
     // ── IRenderer ─────────────────────────────────────────────────────────────
     void beginFrame() override;

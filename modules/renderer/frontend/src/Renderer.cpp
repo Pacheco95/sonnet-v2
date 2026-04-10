@@ -76,6 +76,20 @@ void Renderer::bindRenderTarget(RenderTargetHandle handle) {
     m_backend.bindRenderTarget(*it->second);
 }
 
+GPUTextureHandle Renderer::depthTextureHandle(RenderTargetHandle handle) {
+    auto it = m_renderTargets.find(handle);
+    if (it == m_renderTargets.end())
+        throw std::invalid_argument("depthTextureHandle: unknown RenderTargetHandle");
+
+    const ITexture *tex = it->second->depthTexture();
+    if (!tex)
+        throw std::invalid_argument("depthTextureHandle: render target has no depth texture");
+
+    GPUTextureHandle texHandle{m_nextId++};
+    m_textures.emplace(texHandle, std::make_unique<BorrowedTexture>(tex));
+    return texHandle;
+}
+
 GPUTextureHandle Renderer::colorTextureHandle(RenderTargetHandle handle, std::size_t colorIndex) {
     auto it = m_renderTargets.find(handle);
     if (it == m_renderTargets.end())
@@ -183,6 +197,11 @@ void Renderer::bindMaterial(const MaterialInstance &mat,
     upload("uModel",      modelMatrix);
     upload("uView",       ctx.viewMatrix);
     upload("uProjection", ctx.projectionMatrix);
+
+    // Upload light-space matrix if present.
+    if (ctx.lightSpaceMatrix) {
+        upload("uLightSpaceMatrix", *ctx.lightSpaceMatrix);
+    }
 
     // Upload directional light if present.
     if (ctx.directionalLight) {

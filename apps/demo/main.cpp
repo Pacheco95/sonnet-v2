@@ -1,5 +1,5 @@
-// Sonnet v2 — Phase 16 demo
-// HDR offscreen pass → ACES tone-mapping → default framebuffer; ImGui debug panel (Tab).
+// Sonnet v2 — Phase 17 demo
+// Shadow map → HDR offscreen pass → ACES tone-mapping → default framebuffer; ImGui debug panel (Tab).
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/input/InputSystem.h>
@@ -15,13 +15,32 @@
 
 #include <imgui.h>
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
-// ── Embedded shaders ──────────────────────────────────────────────────────────
+// ── Shadow-map pass shaders ───────────────────────────────────────────────────
+
+static constexpr const char *SHADOW_VERT = R"glsl(
+#version 330 core
+layout(location = 0) in vec3 aPosition;
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProjection;
+void main() {
+    gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
+}
+)glsl";
+
+static constexpr const char *SHADOW_FRAG = R"glsl(
+#version 330 core
+void main() {}
+)glsl";
+
+// ── Scene shaders (lit + shadow) ──────────────────────────────────────────────
 // Vertex layout: position(0), texcoord(2), normal(3)
 
 static constexpr const char *VERT_SRC = R"glsl(
@@ -33,17 +52,20 @@ layout(location = 3) in vec3 aNormal;
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
+uniform mat4 uLightSpaceMatrix;
 
 out vec3 vNormal;
 out vec3 vFragPos;
 out vec2 vTexCoord;
+out vec4 vLightSpacePos;
 
 void main() {
-    vec4 worldPos   = uModel * vec4(aPosition, 1.0);
-    gl_Position     = uProjection * uView * worldPos;
-    vFragPos        = worldPos.xyz;
-    vNormal         = mat3(transpose(inverse(uModel))) * aNormal;
-    vTexCoord       = aTexCoord;
+    vec4 worldPos    = uModel * vec4(aPosition, 1.0);
+    gl_Position      = uProjection * uView * worldPos;
+    vFragPos         = worldPos.xyz;
+    vNormal          = mat3(transpose(inverse(uModel))) * aNormal;
+    vTexCoord        = aTexCoord;
+    vLightSpacePos   = uLightSpaceMatrix * worldPos;
 }
 )glsl";
 
@@ -52,6 +74,7 @@ static constexpr const char *FRAG_SRC = R"glsl(
 in  vec3 vNormal;
 in  vec3 vFragPos;
 in  vec2 vTexCoord;
+in  vec4 vLightSpacePos;
 out vec4 fragColor;
 
 struct DirLight {
@@ -61,13 +84,36 @@ struct DirLight {
 };
 uniform DirLight  uDirLight;
 uniform sampler2D uAlbedo;
+uniform sampler2D uShadowMap;
+uniform float     uShadowBias;
+
+// 3×3 PCF shadow factor
+float shadowFactor(vec3 n) {
+    vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
+    proj = proj * 0.5 + 0.5;
+    // Outside the shadow frustum → fully lit
+    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 ||
+                        proj.y < 0.0 || proj.y > 1.0)
+        return 1.0;
+    float bias = max(uShadowBias * (1.0 - dot(n, normalize(uDirLight.direction))),
+                     uShadowBias * 0.1);
+    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
+    float shadow = 0.0;
+    for (int x = -1; x <= 1; ++x)
+        for (int y = -1; y <= 1; ++y) {
+            float closest = texture(uShadowMap, proj.xy + vec2(x, y) * texelSize).r;
+            shadow += proj.z - bias > closest ? 0.0 : 1.0;
+        }
+    return shadow / 9.0;
+}
 
 void main() {
-    vec3  n       = normalize(vNormal);
-    float diff    = max(dot(n, normalize(uDirLight.direction)), 0.0);
-    vec3  albedo  = texture(uAlbedo, vTexCoord).rgb;
-    vec3  col     = (0.15 + diff * uDirLight.intensity) * uDirLight.color * albedo;
-    fragColor     = vec4(col, 1.0);
+    vec3  n      = normalize(vNormal);
+    float diff   = max(dot(n, normalize(uDirLight.direction)), 0.0);
+    vec3  albedo = texture(uAlbedo, vTexCoord).rgb;
+    float shadow = shadowFactor(n);
+    vec3  col    = (0.15 + diff * uDirLight.intensity * shadow) * uDirLight.color * albedo;
+    fragColor    = vec4(col, 1.0);
 }
 )glsl";
 
@@ -192,9 +238,36 @@ int main() {
     };
     const auto texHandle = renderer.createTexture(texDesc, {}, cpuTex);
 
-    // Build material instance (shared across frames; texture slot is constant).
+    // ── Shadow map render target (depth texture, no colour) ───────────────────
+    constexpr std::uint32_t SHADOW_SIZE = 2048;
+    const auto shadowRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+        .width  = SHADOW_SIZE,
+        .height = SHADOW_SIZE,
+        .colors = {},
+        .depth  = sonnet::api::render::TextureAttachmentDesc{
+            .format      = sonnet::api::render::TextureFormat::Depth24,
+            .samplerDesc = {
+                .minFilter = sonnet::api::render::MinFilter::Nearest,
+                .magFilter = sonnet::api::render::MagFilter::Nearest,
+                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+            },
+        },
+    });
+    const auto shadowDepthHandle = renderer.depthTextureHandle(shadowRTHandle);
+
+    // Shadow-pass shader and material.
+    const auto shadowShader  = renderer.createShader(SHADOW_VERT, SHADOW_FRAG);
+    const auto shadowMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = shadowShader,
+        .renderState  = {},
+    });
+    sonnet::api::render::MaterialInstance shadowMat{shadowMatTmpl};
+
+    // Main material instance — albedo + shadow map.
     sonnet::api::render::MaterialInstance cubeMat{matHandle};
-    cubeMat.addTexture("uAlbedo", texHandle);
+    cubeMat.addTexture("uAlbedo",    texHandle);
+    cubeMat.addTexture("uShadowMap", shadowDepthHandle);
 
     // Scene setup.
     sonnet::world::Scene scene;
@@ -204,13 +277,13 @@ int main() {
         .material = cubeMat,
     };
 
-    // ── HDR render target (created once; resized when the window changes) ──────
-    const auto fbSize0 = window.getFrameBufferSize();
-    auto hdrRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+    // ── HDR render target ─────────────────────────────────────────────────────
+    const auto fbSize0    = window.getFrameBufferSize();
+    const auto hdrRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
         .width  = fbSize0.x,
         .height = fbSize0.y,
         .colors = {{
-            .format = sonnet::api::render::TextureFormat::RGBA16F,
+            .format      = sonnet::api::render::TextureFormat::RGBA16F,
             .samplerDesc = {
                 .minFilter = sonnet::api::render::MinFilter::Linear,
                 .magFilter = sonnet::api::render::MagFilter::Linear,
@@ -220,34 +293,39 @@ int main() {
         }},
         .depth  = sonnet::api::render::RenderBufferDesc{},
     });
-    auto hdrTexHandle = renderer.colorTextureHandle(hdrRTHandle, 0);
+    const auto hdrTexHandle = renderer.colorTextureHandle(hdrRTHandle, 0);
 
-    // ── Tone-mapping fullscreen quad ───────────────────────────────────────────
-    const auto quadMesh        = sonnet::primitives::makeQuad({2.0f, 2.0f});
-    const auto quadMeshHandle  = renderer.createMesh(quadMesh);
-    const auto tonemapShader   = renderer.createShader(TONEMAP_VERT, TONEMAP_FRAG);
-    const auto tonemapMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+    // ── Tone-mapping fullscreen quad ──────────────────────────────────────────
+    const auto quadMesh       = sonnet::primitives::makeQuad({2.0f, 2.0f});
+    const auto quadMeshHandle = renderer.createMesh(quadMesh);
+    const auto tonemapShader  = renderer.createShader(TONEMAP_VERT, TONEMAP_FRAG);
+    const auto tonemapMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = tonemapShader,
-        .renderState  = {.depthTest = false, .depthWrite = false, .cull = sonnet::api::render::CullMode::None},
+        .renderState  = {
+            .depthTest = false,
+            .depthWrite = false,
+            .cull = sonnet::api::render::CullMode::None,
+        },
     });
     sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
     tonemapMat.addTexture("uHdrColor", hdrTexHandle);
 
     // Tweakable state exposed via ImGui.
-    float              rotationSpeed  = 45.0f;
-    glm::vec3          lightDir       = {0.6f, 1.0f, 0.4f};
-    glm::vec3          lightColor     = {1.0f, 1.0f, 1.0f};
-    float              lightIntensity = 1.0f;
-    float              exposure       = 1.0f;
-    bool               uiMode         = false;  // Tab toggles cursor capture
+    float     rotationSpeed  = 45.0f;
+    glm::vec3 lightDir       = {0.6f, 1.0f, 0.4f};
+    glm::vec3 lightColor     = {1.0f, 1.0f, 1.0f};
+    float     lightIntensity = 1.0f;
+    float     exposure       = 1.0f;
+    float     shadowBias     = 0.005f;
+    bool      uiMode         = false;
 
     FlyCamera camera;
-    float rotation = 0.0f;
+    float  rotation = 0.0f;
     double prevTime = glfwGetTime();
 
     while (!window.shouldClose()) {
         const double now = glfwGetTime();
-        const float dt = static_cast<float>(now - prevTime);
+        const float  dt  = static_cast<float>(now - prevTime);
         prevTime = now;
 
         window.pollEvents();
@@ -255,7 +333,6 @@ int main() {
         if (input.isKeyJustPressed(sonnet::api::input::Key::Escape))
             window.requestClose();
 
-        // Tab toggles between fly-camera mode and UI mode.
         if (input.isKeyJustPressed(sonnet::api::input::Key::Tab)) {
             uiMode = !uiMode;
             if (uiMode) window.releaseCursor();
@@ -264,7 +341,6 @@ int main() {
 
         const auto fbSize = window.getFrameBufferSize();
 
-        // Only move the camera when the cursor is captured.
         if (!uiMode)
             camera.update(dt, input, fbSize);
 
@@ -274,13 +350,54 @@ int main() {
             glm::angleAxis(glm::radians(rotation * 0.3f), glm::vec3{1, 0, 0})
         );
 
-        // ── Pass 1: render scene to HDR offscreen target ───────────────────────
+        // ── Light-space matrix (orthographic projection from the light) ────────
+        const glm::vec3 lightDirNorm = glm::normalize(lightDir);
+        const glm::vec3 lightUp = std::abs(lightDirNorm.y) > 0.99f
+                                ? glm::vec3{0.0f, 0.0f, 1.0f}
+                                : glm::vec3{0.0f, 1.0f, 0.0f};
+        const glm::mat4 lightView = glm::lookAt(lightDirNorm * 10.0f,
+                                                glm::vec3{0.0f},
+                                                lightUp);
+        const glm::mat4 lightProj = glm::ortho(-2.0f, 2.0f, -2.0f, 2.0f, 1.0f, 20.0f);
+        const glm::mat4 lightSpaceMat = lightProj * lightView;
+
+        // ── Pass 1: shadow map ─────────────────────────────────────────────────
+        renderer.bindRenderTarget(shadowRTHandle);
+        backend.setViewport(SHADOW_SIZE, SHADOW_SIZE);
+        backend.clear({ .depth = 1.0f });
+
+        const glm::vec3 shadowOrigin{0.0f};
+        sonnet::api::render::FrameContext shadowCtx{
+            .viewMatrix       = lightView,
+            .projectionMatrix = lightProj,
+            .viewPosition     = shadowOrigin,
+            .viewportWidth    = SHADOW_SIZE,
+            .viewportHeight   = SHADOW_SIZE,
+            .deltaTime        = 0.0f,
+        };
+        // Build shadow queue: same geometry, shadow-only material.
+        std::vector<sonnet::api::render::RenderItem> shadowQueue;
+        for (const auto &obj : scene.objects()) {
+            if (!obj->render) continue;
+            shadowQueue.push_back({
+                .mesh        = obj->render->mesh,
+                .material    = shadowMat,
+                .modelMatrix = obj->transform.getModelMatrix(),
+            });
+        }
+        renderer.beginFrame();
+        renderer.render(shadowCtx, shadowQueue);
+        renderer.endFrame();
+
+        // ── Pass 2: HDR scene ──────────────────────────────────────────────────
         renderer.bindRenderTarget(hdrRTHandle);
         backend.setViewport(fbSize.x, fbSize.y);
         backend.clear({
             .colors = {{0, {0.1f, 0.1f, 0.15f, 1.0f}}},
             .depth  = 1.0f,
         });
+
+        cubeMat.set("uShadowBias", shadowBias);
 
         sonnet::api::render::FrameContext ctx{
             .viewMatrix       = camera.view(),
@@ -294,6 +411,7 @@ int main() {
                 .color     = lightColor,
                 .intensity = lightIntensity,
             },
+            .lightSpaceMatrix = lightSpaceMat,
         };
 
         std::vector<sonnet::api::render::RenderItem> queue;
@@ -303,12 +421,10 @@ int main() {
         renderer.render(ctx, queue);
         renderer.endFrame();
 
-        // ── Pass 2: tone-map HDR → default framebuffer ────────────────────────
+        // ── Pass 3: tone-map HDR → default framebuffer ────────────────────────
         backend.bindDefaultRenderTarget();
         backend.setViewport(fbSize.x, fbSize.y);
-        backend.clear({
-            .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}},
-        });
+        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
 
         tonemapMat.set("uExposure", exposure);
 
@@ -340,6 +456,10 @@ int main() {
                 ImGui::DragFloat3("Direction",  &lightDir.x,   0.01f, -1.0f, 1.0f);
                 ImGui::ColorEdit3("Color",      &lightColor.x);
                 ImGui::SliderFloat("Intensity", &lightIntensity, 0.0f, 4.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Bias", &shadowBias, 0.0001f, 0.05f, "%.4f");
             }
 
             if (ImGui::CollapsingHeader("Tone-mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
