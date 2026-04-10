@@ -194,9 +194,10 @@ void Renderer::bindMaterial(const MaterialInstance &mat,
             m_backend.setUniform(it->second.location, val);
         }
     };
-    upload("uModel",      modelMatrix);
-    upload("uView",       ctx.viewMatrix);
-    upload("uProjection", ctx.projectionMatrix);
+    upload("uModel",        modelMatrix);
+    upload("uView",         ctx.viewMatrix);
+    upload("uProjection",   ctx.projectionMatrix);
+    upload("uViewPosition", ctx.viewPosition);
 
     // Upload light-space matrix if present.
     if (ctx.lightSpaceMatrix) {

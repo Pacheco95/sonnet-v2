@@ -183,6 +183,12 @@ int main() {
     float     shadowBias     = 0.005f;
     bool      uiMode         = false;
 
+    // Per-object PBR parameters — override the template defaults each frame.
+    float cubeMetallic  = 0.8f;
+    float cubeRoughness = 0.2f;
+    float floorMetallic  = 0.0f;
+    float floorRoughness = 0.8f;
+
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
 
@@ -263,7 +269,11 @@ int main() {
         });
 
         cubeMat.set("uShadowBias",  shadowBias);
+        cubeMat.set("uMetallic",    cubeMetallic);
+        cubeMat.set("uRoughness",   cubeRoughness);
         floorMat.set("uShadowBias", shadowBias);
+        floorMat.set("uMetallic",   floorMetallic);
+        floorMat.set("uRoughness",  floorRoughness);
 
         const float aspect = fbSize.x > 0 && fbSize.y > 0
             ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
@@ -337,6 +347,16 @@ int main() {
 
             if (ImGui::CollapsingHeader("Tone-mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Text("Cube");
+                ImGui::SliderFloat("Metallic##cube",  &cubeMetallic,  0.0f, 1.0f);
+                ImGui::SliderFloat("Roughness##cube", &cubeRoughness, 0.0f, 1.0f);
+                ImGui::Spacing();
+                ImGui::Text("Floor");
+                ImGui::SliderFloat("Metallic##floor",  &floorMetallic,  0.0f, 1.0f);
+                ImGui::SliderFloat("Roughness##floor", &floorRoughness, 0.0f, 1.0f);
             }
 
             if (ImGui::CollapsingHeader("Object", ImGuiTreeNodeFlags_DefaultOpen)) {

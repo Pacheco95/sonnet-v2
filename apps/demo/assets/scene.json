@@ -6,7 +6,11 @@
         "materials": {
             "lit": {
                 "shader": "lit",
-                "defaultValues": { "uShadowBias": 0.005 }
+                "defaultValues": {
+                    "uShadowBias": 0.005,
+                    "uMetallic":  0.0,
+                    "uRoughness": 0.5
+                }
             }
         },
         "meshes": {
