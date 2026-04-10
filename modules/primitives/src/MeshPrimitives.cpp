@@ -11,13 +11,25 @@ namespace sonnet::primitives {
 
 using namespace sonnet::api::render;
 
-// ── Shared layout builder ─────────────────────────────────────────────────────
+// ── Layout builders ───────────────────────────────────────────────────────────
 
+// Position + TexCoord + Normal (quads, spheres — no tangents needed)
 static VertexLayout pntLayout() {
     KnownAttributeSet attrs;
     attrs.insert(PositionAttribute{});
     attrs.insert(TexCoordAttribute{});
     attrs.insert(NormalAttribute{});
+    return VertexLayout{attrs};
+}
+
+// Position + TexCoord + Normal + Tangent + BiTangent (boxes, OBJ models)
+static VertexLayout pntbtLayout() {
+    KnownAttributeSet attrs;
+    attrs.insert(PositionAttribute{});
+    attrs.insert(TexCoordAttribute{});
+    attrs.insert(NormalAttribute{});
+    attrs.insert(TangentAttribute{});
+    attrs.insert(BiTangentAttribute{});
     return VertexLayout{attrs};
 }
 
@@ -32,28 +44,50 @@ static void addVertex(CPUMesh &mesh,
     mesh.addVertex(attrs);
 }
 
+static void addVertex(CPUMesh &mesh,
+                      const glm::vec3 &pos,
+                      const glm::vec2 &uv,
+                      const glm::vec3 &normal,
+                      const glm::vec3 &tangent,
+                      const glm::vec3 &bitangent) {
+    KnownAttributeSet attrs;
+    attrs.insert(PositionAttribute{pos});
+    attrs.insert(TexCoordAttribute{uv});
+    attrs.insert(NormalAttribute{normal});
+    attrs.insert(TangentAttribute{tangent});
+    attrs.insert(BiTangentAttribute{bitangent});
+    mesh.addVertex(attrs);
+}
+
 // ── Box ───────────────────────────────────────────────────────────────────────
 
 api::render::CPUMesh makeBox(glm::vec3 size) {
     const glm::vec3 h = size * 0.5f;
 
     struct FaceVert { glm::vec3 pos; glm::vec2 uv; };
-    struct Face { FaceVert v[4]; glm::vec3 normal; };
+    struct Face {
+        FaceVert   v[4];
+        glm::vec3  normal;
+        // Tangent = dPosition/dU, BiTangent = dPosition/dV (UV-space axes in world space).
+        // Derived from the vertex positions at UV corners (0,0)→(1,0) and (0,0)→(0,1).
+        glm::vec3  tangent;
+        glm::vec3  bitangent;
+    };
 
     // clang-format off
     const Face faces[] = {
-        // +X
-        { {{{+h.x,-h.y,-h.z},{0,0}}, {{+h.x,+h.y,-h.z},{0,1}}, {{+h.x,+h.y,+h.z},{1,1}}, {{+h.x,-h.y,+h.z},{1,0}}}, {+1,0,0} },
-        // -X
-        { {{{-h.x,-h.y,+h.z},{0,0}}, {{-h.x,+h.y,+h.z},{0,1}}, {{-h.x,+h.y,-h.z},{1,1}}, {{-h.x,-h.y,-h.z},{1,0}}}, {-1,0,0} },
-        // +Y
-        { {{{-h.x,+h.y,-h.z},{0,0}}, {{-h.x,+h.y,+h.z},{0,1}}, {{+h.x,+h.y,+h.z},{1,1}}, {{+h.x,+h.y,-h.z},{1,0}}}, {0,+1,0} },
-        // -Y
-        { {{{-h.x,-h.y,+h.z},{0,0}}, {{-h.x,-h.y,-h.z},{0,1}}, {{+h.x,-h.y,-h.z},{1,1}}, {{+h.x,-h.y,+h.z},{1,0}}}, {0,-1,0} },
-        // +Z
-        { {{{-h.x,-h.y,+h.z},{0,0}}, {{+h.x,-h.y,+h.z},{1,0}}, {{+h.x,+h.y,+h.z},{1,1}}, {{-h.x,+h.y,+h.z},{0,1}}}, {0,0,+1} },
-        // -Z
-        { {{{+h.x,-h.y,-h.z},{0,0}}, {{-h.x,-h.y,-h.z},{1,0}}, {{-h.x,+h.y,-h.z},{1,1}}, {{+h.x,+h.y,-h.z},{0,1}}}, {0,0,-1} },
+        // +X  normal=(+1,0,0)  UV: U→+Z, V→+Y
+        { {{{+h.x,-h.y,-h.z},{0,0}}, {{+h.x,+h.y,-h.z},{0,1}}, {{+h.x,+h.y,+h.z},{1,1}}, {{+h.x,-h.y,+h.z},{1,0}}}, {+1,0,0}, {0,0,+1}, {0,+1,0} },
+        // -X  normal=(-1,0,0)  UV: U→-Z, V→+Y
+        { {{{-h.x,-h.y,+h.z},{0,0}}, {{-h.x,+h.y,+h.z},{0,1}}, {{-h.x,+h.y,-h.z},{1,1}}, {{-h.x,-h.y,-h.z},{1,0}}}, {-1,0,0}, {0,0,-1}, {0,+1,0} },
+        // +Y  normal=(0,+1,0)  UV: U→+X, V→+Z
+        { {{{-h.x,+h.y,-h.z},{0,0}}, {{-h.x,+h.y,+h.z},{0,1}}, {{+h.x,+h.y,+h.z},{1,1}}, {{+h.x,+h.y,-h.z},{1,0}}}, {0,+1,0}, {+1,0,0}, {0,0,+1} },
+        // -Y  normal=(0,-1,0)  UV: U→+X, V→-Z
+        { {{{-h.x,-h.y,+h.z},{0,0}}, {{-h.x,-h.y,-h.z},{0,1}}, {{+h.x,-h.y,-h.z},{1,1}}, {{+h.x,-h.y,+h.z},{1,0}}}, {0,-1,0}, {+1,0,0}, {0,0,-1} },
+        // +Z  normal=(0,0,+1)  UV: U→+X, V→+Y
+        { {{{-h.x,-h.y,+h.z},{0,0}}, {{+h.x,-h.y,+h.z},{1,0}}, {{+h.x,+h.y,+h.z},{1,1}}, {{-h.x,+h.y,+h.z},{0,1}}}, {0,0,+1}, {+1,0,0}, {0,+1,0} },
+        // -Z  normal=(0,0,-1)  UV: U→-X, V→+Y
+        { {{{+h.x,-h.y,-h.z},{0,0}}, {{-h.x,-h.y,-h.z},{1,0}}, {{-h.x,+h.y,-h.z},{1,1}}, {{+h.x,+h.y,-h.z},{0,1}}}, {0,0,-1}, {-1,0,0}, {0,+1,0} },
     };
     // clang-format on
 
@@ -64,10 +98,10 @@ api::render::CPUMesh makeBox(glm::vec3 size) {
         indices.insert(indices.end(), {base+0,base+1,base+2, base+0,base+2,base+3});
     }
 
-    CPUMesh mesh{pntLayout(), std::move(indices), 24};
+    CPUMesh mesh{pntbtLayout(), std::move(indices), 24};
     for (const auto &face : faces) {
         for (const auto &v : face.v) {
-            addVertex(mesh, v.pos, v.uv, face.normal);
+            addVertex(mesh, v.pos, v.uv, face.normal, face.tangent, face.bitangent);
         }
     }
     return mesh;

@@ -8,8 +8,8 @@
                 "shader": "lit",
                 "defaultValues": {
                     "uShadowBias": 0.005,
-                    "uMetallic":  0.0,
-                    "uRoughness": 0.5
+                    "uMetallic":  1.0,
+                    "uRoughness": 1.0
                 }
             }
         },
@@ -18,8 +18,13 @@
             "floor": { "primitive": "box", "size": [6.0, 0.1, 6.0] }
         },
         "textures": {
-            "checkerboard": "checkerboard.png",
-            "gray":         { "color": [180, 180, 180] }
+            "metalAlbedo": "metal034_albedo.jpg",
+            "metalNormal": { "file": "metal034_normal.jpg", "srgb": false },
+            "metalORM":    { "file": "metal034_orm.png",   "srgb": false },
+            "tilesAlbedo": "tiles074_albedo.jpg",
+            "tilesNormal": { "file": "tiles074_normal.jpg", "srgb": false },
+            "tilesORM":    { "file": "tiles074_orm.png",   "srgb": false },
+            "flatNormal":  { "color": [128, 128, 255], "srgb": false }
         }
     },
     "objects": [
@@ -34,7 +39,9 @@
                 "mesh":     "cube",
                 "material": "lit",
                 "textures": {
-                    "uAlbedo":    "checkerboard",
+                    "uAlbedo":    "metalAlbedo",
+                    "uNormalMap": "metalNormal",
+                    "uORM":       "metalORM",
                     "uShadowMap": "shadowDepth"
                 }
             }
@@ -46,7 +53,9 @@
                 "mesh":     "floor",
                 "material": "lit",
                 "textures": {
-                    "uAlbedo":    "gray",
+                    "uAlbedo":    "tilesAlbedo",
+                    "uNormalMap": "tilesNormal",
+                    "uORM":       "tilesORM",
                     "uShadowMap": "shadowDepth"
                 }
             }

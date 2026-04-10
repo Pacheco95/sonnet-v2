@@ -183,11 +183,12 @@ int main() {
     float     shadowBias     = 0.005f;
     bool      uiMode         = false;
 
-    // Per-object PBR parameters — override the template defaults each frame.
-    float cubeMetallic  = 0.8f;
-    float cubeRoughness = 0.2f;
-    float floorMetallic  = 0.0f;
-    float floorRoughness = 0.8f;
+    // Per-object PBR scalar multipliers — applied on top of the ORM texture.
+    // 1.0 = let the texture drive everything.
+    float cubeMetallic   = 1.0f;
+    float cubeRoughness  = 1.0f;
+    float floorMetallic  = 1.0f;
+    float floorRoughness = 1.0f;
 
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();

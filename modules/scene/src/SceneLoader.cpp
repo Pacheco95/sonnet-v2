@@ -56,15 +56,24 @@ core::GPUMeshHandle loadMesh(const json &spec,
 core::GPUTextureHandle loadTexture(const json &spec,
                                     const std::string &assetsDir,
                                     renderer::frontend::Renderer &renderer) {
-    if (spec.is_string()) {
-        const std::string path = assetsDir + "/" + spec.get<std::string>();
+    // Optional "srgb": false marks data textures (normal maps, ORM) as linear.
+    // Default is true (sRGB) for colour/albedo textures.
+    const bool srgb = spec.is_object() ? spec.value("srgb", true) : true;
+    const ColorSpace colorSpace = srgb ? ColorSpace::sRGB : ColorSpace::Linear;
+
+    // File path: either a bare string or { "file": "path", "srgb": false }
+    if (spec.is_string() || (spec.is_object() && spec.contains("file"))) {
+        const std::string filePath = spec.is_string()
+            ? spec.get<std::string>()
+            : spec["file"].get<std::string>();
+        const std::string path = assetsDir + "/" + filePath;
         auto cpuTex = loaders::TextureLoader::load(path);
         const auto fmt = cpuTex.channels == 4 ? TextureFormat::RGBA8 : TextureFormat::RGB8;
         return renderer.createTexture(
             TextureDesc{
                 .size       = {cpuTex.width, cpuTex.height},
                 .format     = fmt,
-                .colorSpace = ColorSpace::sRGB,
+                .colorSpace = colorSpace,
             }, {}, cpuTex);
     }
 
@@ -79,7 +88,7 @@ core::GPUTextureHandle loadTexture(const json &spec,
         TextureDesc{
             .size       = {1, 1},
             .format     = TextureFormat::RGB8,
-            .colorSpace = ColorSpace::sRGB,
+            .colorSpace = colorSpace,
             .useMipmaps = false,
         },
         {},

@@ -13,11 +13,13 @@ namespace sonnet::loaders {
 
 using namespace sonnet::api::render;
 
-static VertexLayout pntLayout() {
+static VertexLayout pntbtLayout() {
     KnownAttributeSet attrs;
     attrs.insert(PositionAttribute{});
     attrs.insert(TexCoordAttribute{});
     attrs.insert(NormalAttribute{});
+    attrs.insert(TangentAttribute{});
+    attrs.insert(BiTangentAttribute{});
     return VertexLayout{attrs};
 }
 
@@ -31,7 +33,7 @@ static CPUMesh convertMesh(const aiMesh *mesh) {
         }
     }
 
-    CPUMesh cpuMesh{pntLayout(), std::move(indices), mesh->mNumVertices};
+    CPUMesh cpuMesh{pntbtLayout(), std::move(indices), mesh->mNumVertices};
     for (unsigned v = 0; v < mesh->mNumVertices; ++v) {
         const aiVector3D &p = mesh->mVertices[v];
         const aiVector3D &n = mesh->mNormals[v];
@@ -39,10 +41,21 @@ static CPUMesh convertMesh(const aiMesh *mesh) {
             ? glm::vec2{mesh->mTextureCoords[0][v].x, mesh->mTextureCoords[0][v].y}
             : glm::vec2{0.0f};
 
+        glm::vec3 tangent{1.0f, 0.0f, 0.0f};
+        glm::vec3 bitangent{0.0f, 1.0f, 0.0f};
+        if (mesh->HasTangentsAndBitangents()) {
+            const aiVector3D &t  = mesh->mTangents[v];
+            const aiVector3D &bt = mesh->mBitangents[v];
+            tangent   = {t.x,  t.y,  t.z};
+            bitangent = {bt.x, bt.y, bt.z};
+        }
+
         KnownAttributeSet attrs;
         attrs.insert(PositionAttribute{glm::vec3{p.x, p.y, p.z}});
         attrs.insert(TexCoordAttribute{uv});
         attrs.insert(NormalAttribute{glm::vec3{n.x, n.y, n.z}});
+        attrs.insert(TangentAttribute{tangent});
+        attrs.insert(BiTangentAttribute{bitangent});
         cpuMesh.addVertex(attrs);
     }
     return cpuMesh;
