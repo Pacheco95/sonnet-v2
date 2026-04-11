@@ -50,6 +50,11 @@ core::GPUMeshHandle loadMesh(const json &spec,
         auto s = spec.at("size");
         return renderer.createMesh(primitives::makeQuad({s[0].get<float>(), s[1].get<float>()}));
     }
+    if (prim == "sphere") {
+        const int segX = spec.value("segmentsX", 32);
+        const int segY = spec.value("segmentsY", 16);
+        return renderer.createMesh(primitives::makeUVSphere(segX, segY, /*smooth=*/true));
+    }
     throw std::runtime_error("SceneLoader: unknown primitive '" + prim + "'");
 }
 

@@ -1,7 +1,8 @@
 {
     "assets": {
         "shaders": {
-            "lit": { "vert": "shaders/lit.vert", "frag": "shaders/lit.frag" }
+            "lit":      { "vert": "shaders/lit.vert",      "frag": "shaders/lit.frag"      },
+            "emissive": { "vert": "shaders/emissive.vert", "frag": "shaders/emissive.frag" }
         },
         "materials": {
             "lit": {
@@ -11,11 +12,19 @@
                     "uMetallic":  1.0,
                     "uRoughness": 1.0
                 }
+            },
+            "lamp": {
+                "shader": "emissive",
+                "defaultValues": {
+                    "uEmissiveColor":    [1.0, 0.75, 0.3],
+                    "uEmissiveStrength": 6.0
+                }
             }
         },
         "meshes": {
-            "cube":  "cube.obj",
-            "floor": { "primitive": "box", "size": [6.0, 0.1, 6.0] }
+            "cube":   "cube.obj",
+            "floor":  { "primitive": "box",    "size": [6.0, 0.1, 6.0] },
+            "sphere": { "primitive": "sphere", "segmentsX": 24, "segmentsY": 12 }
         },
         "textures": {
             "metalAlbedo": "metal034_albedo.jpg",
@@ -64,6 +73,12 @@
             "name":     "Camera",
             "position": [0.0, 0.0, 3.0],
             "camera":   { "fov": 60.0, "near": 0.1, "far": 200.0 }
+        },
+        {
+            "name":     "Lamp",
+            "position": [0.0, 0.6, 0.0],
+            "scale":    [0.12, 0.12, 0.12],
+            "render":   { "mesh": "sphere", "material": "lamp" }
         }
     ]
 }

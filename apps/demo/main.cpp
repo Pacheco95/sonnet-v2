@@ -142,8 +142,10 @@ int main() {
     auto &cube      = *loaded.objects.at("Cube");
     auto &floor     = *loaded.objects.at("Floor");
     auto &cameraObj = *loaded.objects.at("Camera");
+    auto &lamp      = *loaded.objects.at("Lamp");
     auto &cubeMat   = cube.render->material;
     auto &floorMat  = floor.render->material;
+    auto &lampMat   = lamp.render->material;
 
     // Attach IBL textures to every lit material instance.
     const float maxLOD = static_cast<float>(ibl.prefilteredLODs - 1);
@@ -186,8 +188,60 @@ int main() {
             .cull       = sonnet::api::render::CullMode::None,
         },
     });
+    // ── Bloom render targets (same resolution as HDR) ─────────────────────────
+    const auto makeBloomRT = [&]() {
+        return renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+            .width  = fbSize0.x,
+            .height = fbSize0.y,
+            .colors = {{
+                .format      = sonnet::api::render::TextureFormat::RGBA16F,
+                .samplerDesc = {
+                    .minFilter = sonnet::api::render::MinFilter::Linear,
+                    .magFilter = sonnet::api::render::MagFilter::Linear,
+                    .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                    .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+                },
+            }},
+        });
+    };
+    const auto bloomBrightRT  = makeBloomRT();
+    const auto bloomBlurRT    = makeBloomRT();
+    const auto bloomBrightTex = renderer.colorTextureHandle(bloomBrightRT, 0);
+    const auto bloomBlurTex   = renderer.colorTextureHandle(bloomBlurRT,   0);
+
+    // Bright-pass material.
+    const auto noDepthState = sonnet::api::render::RenderState{
+        .depthTest  = false,
+        .depthWrite = false,
+        .cull       = sonnet::api::render::CullMode::None,
+    };
+    const auto bloomBrightFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/bloom_bright.frag");
+    const auto bloomBrightShader  = renderer.createShader(tonemapVertSrc, bloomBrightFragSrc);
+    const auto bloomBrightMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = bloomBrightShader,
+        .renderState  = noDepthState,
+    });
+    sonnet::api::render::MaterialInstance bloomBrightMat{bloomBrightMatTmpl};
+    bloomBrightMat.addTexture("uHdrColor", hdrTexHandle);
+
+    // Blur material (shared; texture swapped each iteration).
+    const auto bloomBlurFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/bloom_blur.frag");
+    const auto bloomBlurShader  = renderer.createShader(tonemapVertSrc, bloomBlurFragSrc);
+    const auto bloomBlurMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = bloomBlurShader,
+        .renderState  = noDepthState,
+    });
+    // Two material instances — one reading from bright, one reading from blur.
+    sonnet::api::render::MaterialInstance bloomBlurHMat{bloomBlurMatTmpl}; // horizontal: bright → blur
+    sonnet::api::render::MaterialInstance bloomBlurVMat{bloomBlurMatTmpl}; // vertical:   blur  → bright
+    bloomBlurHMat.addTexture("uBloomTexture", bloomBrightTex);
+    bloomBlurVMat.addTexture("uBloomTexture", bloomBlurTex);
+    bloomBlurHMat.set("uHorizontal", 1); // non-zero int == true in GLSL
+    bloomBlurVMat.set("uHorizontal", 0);
+
     sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
-    tonemapMat.addTexture("uHdrColor", hdrTexHandle);
+    tonemapMat.addTexture("uHdrColor",      hdrTexHandle);
+    tonemapMat.addTexture("uBloomTexture",  bloomBrightTex); // final blur result ends up here
 
     // ── Skybox ────────────────────────────────────────────────────────────────
     const auto skyVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.vert");
@@ -212,16 +266,21 @@ int main() {
     glm::vec3 lightDir       = {0.6f, 1.0f, 0.4f};
     glm::vec3 lightColor     = {1.0f, 1.0f, 1.0f};
     float     lightIntensity = 1.0f;
-    float     exposure       = 1.0f;
-    float     shadowBias     = 0.005f;
-    bool      uiMode         = false;
+    float     exposure        = 1.0f;
+    float     shadowBias      = 0.005f;
+    float     bloomThreshold  = 0.8f;
+    float     bloomIntensity  = 0.5f;
+    int       bloomIterations = 3;
+    bool      uiMode          = false;
 
     // Per-object PBR scalar multipliers — applied on top of the ORM texture.
     // 1.0 = let the texture drive everything.
-    float cubeMetallic   = 1.0f;
-    float cubeRoughness  = 1.0f;
-    float floorMetallic  = 1.0f;
-    float floorRoughness = 1.0f;
+    float cubeMetallic      = 1.0f;
+    float cubeRoughness     = 1.0f;
+    float floorMetallic     = 1.0f;
+    float floorRoughness    = 1.0f;
+    glm::vec3 lampColor     = {1.0f, 0.75f, 0.3f};
+    float     lampStrength  = 6.0f;
 
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -308,6 +367,8 @@ int main() {
         floorMat.set("uShadowBias", shadowBias);
         floorMat.set("uMetallic",   floorMetallic);
         floorMat.set("uRoughness",  floorRoughness);
+        lampMat.set("uEmissiveColor",    lampColor);
+        lampMat.set("uEmissiveStrength", lampStrength);
 
         const float aspect = fbSize.x > 0 && fbSize.y > 0
             ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
@@ -346,16 +407,10 @@ int main() {
         renderer.render(ctx, skyQueue);   // sky fills depth=1.0 regions
         renderer.endFrame();
 
-        // ── Pass 3: tone-map HDR -> default framebuffer ───────────────────────
-        backend.bindDefaultRenderTarget();
-        backend.setViewport(fbSize.x, fbSize.y);
-        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-
-        tonemapMat.set("uExposure", exposure);
-
+        // ── Pass 2.5: bloom ────────────────────────────────────────────────────
         const glm::mat4 identity{1.0f};
         const glm::vec3 origin{0.0f};
-        sonnet::api::render::FrameContext tonemapCtx{
+        sonnet::api::render::FrameContext ppCtx{
             .viewMatrix       = identity,
             .projectionMatrix = identity,
             .viewPosition     = origin,
@@ -363,14 +418,47 @@ int main() {
             .viewportHeight   = fbSize.y,
             .deltaTime        = 0.0f,
         };
-        std::vector<sonnet::api::render::RenderItem> tonemapQueue{{
-            .mesh        = quadMeshHandle,
-            .material    = tonemapMat,
-            .modelMatrix = glm::mat4{1.0f},
-        }};
-        renderer.beginFrame();
-        renderer.render(tonemapCtx, tonemapQueue);
-        renderer.endFrame();
+        const auto fullscreenQuad = [&](sonnet::api::render::MaterialInstance &mat) {
+            std::vector<sonnet::api::render::RenderItem> q{{
+                .mesh        = quadMeshHandle,
+                .material    = mat,
+                .modelMatrix = identity,
+            }};
+            renderer.beginFrame();
+            renderer.render(ppCtx, q);
+            renderer.endFrame();
+        };
+
+        // Bright-pass extract.
+        renderer.bindRenderTarget(bloomBrightRT);
+        backend.setViewport(fbSize.x, fbSize.y);
+        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+        bloomBrightMat.set("uBloomThreshold", bloomThreshold);
+        fullscreenQuad(bloomBrightMat);
+
+        // Ping-pong Gaussian blur.
+        for (int i = 0; i < bloomIterations; ++i) {
+            renderer.bindRenderTarget(bloomBlurRT);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+            fullscreenQuad(bloomBlurHMat); // bright → blur (horizontal)
+
+            renderer.bindRenderTarget(bloomBrightRT);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+            fullscreenQuad(bloomBlurVMat); // blur → bright (vertical)
+        }
+        // bloomBrightRT now holds the final blurred bloom.
+
+        // ── Pass 3: tone-map HDR -> default framebuffer ───────────────────────
+        backend.bindDefaultRenderTarget();
+        backend.setViewport(fbSize.x, fbSize.y);
+        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+
+        tonemapMat.set("uExposure",       exposure);
+        tonemapMat.set("uBloomIntensity", bloomIntensity);
+
+        fullscreenQuad(tonemapMat);
 
         // ── ImGui ──────────────────────────────────────────────────────────────
         imgui.begin();
@@ -378,9 +466,9 @@ int main() {
             ImGui::Begin("Debug  [Tab to close]");
 
             if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::DragFloat3("Direction",  &lightDir.x,   0.01f, -1.0f, 1.0f);
-                ImGui::ColorEdit3("Color",      &lightColor.x);
-                ImGui::SliderFloat("Intensity", &lightIntensity, 0.0f, 4.0f);
+                ImGui::DragFloat3("Direction",       &lightDir.x,     0.01f, -1.0f, 1.0f);
+                ImGui::ColorEdit3("Color",           &lightColor.x);
+                ImGui::SliderFloat("Intensity##light",&lightIntensity, 0.0f,  4.0f);
             }
 
             if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -389,6 +477,17 @@ int main() {
 
             if (ImGui::CollapsingHeader("Tone-mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Lamp", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::ColorEdit3("Color##lamp",     &lampColor.x);
+                ImGui::SliderFloat("Strength##lamp", &lampStrength, 0.0f, 20.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Threshold##bloom",  &bloomThreshold,  0.5f, 3.0f);
+                ImGui::SliderFloat("Intensity##bloom",  &bloomIntensity,  0.0f, 3.0f);
+                ImGui::SliderInt  ("Iterations##bloom", &bloomIterations, 1,    8);
             }
 
             if (ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen)) {
