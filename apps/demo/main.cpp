@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
+#include <string>
 #include <vector>
 
 // ── Fly camera ────────────────────────────────────────────────────────────────
@@ -122,6 +124,41 @@ int main() {
     });
     sonnet::api::render::MaterialInstance shadowMat{shadowMatTmpl};
 
+    // ── SSAO hemisphere kernel (64 samples, biased towards origin) ───────────
+    std::vector<glm::vec3> ssaoKernel(64);
+    {
+        std::mt19937 rng(42);
+        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+        for (int i = 0; i < 64; ++i) {
+            glm::vec3 sample{dist(rng) * 2.0f - 1.0f,
+                             dist(rng) * 2.0f - 1.0f,
+                             dist(rng)};
+            sample = glm::normalize(sample) * dist(rng);
+            const float scale = static_cast<float>(i) / 64.0f;
+            ssaoKernel[i] = sample * glm::mix(0.1f, 1.0f, scale * scale);
+        }
+    }
+
+    // ── SSAO noise texture (4×4, random tangent-space rotations) ─────────────
+    GLuint ssaoNoiseTex = 0;
+    {
+        std::mt19937 rng(123);
+        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+        std::vector<glm::vec3> noiseData(16);
+        for (auto &n : noiseData)
+            n = glm::vec3{dist(rng) * 2.0f - 1.0f, dist(rng) * 2.0f - 1.0f, 0.0f};
+        glGenTextures(1, &ssaoNoiseTex);
+        glBindTexture(GL_TEXTURE_2D, ssaoNoiseTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0, GL_RGB, GL_FLOAT, noiseData.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_REPEAT);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    const auto ssaoNoiseHandle = renderer.registerRawTexture(
+        std::make_unique<RawGLTexture2D>(ssaoNoiseTex));
+
     // ── IBL — bake irradiance, pre-filtered specular, BRDF LUT ───────────────
     const IBLMaps ibl = buildIBL(
         renderer,
@@ -147,15 +184,6 @@ int main() {
     auto &floorMat  = floor.render->material;
     auto &lampMat   = lamp.render->material;
 
-    // Attach IBL textures to every lit material instance.
-    const float maxLOD = static_cast<float>(ibl.prefilteredLODs - 1);
-    for (auto *mat : {&cubeMat, &floorMat}) {
-        mat->addTexture("uIrradianceMap",  ibl.irradianceHandle);
-        mat->addTexture("uPrefilteredMap", ibl.prefilteredHandle);
-        mat->addTexture("uBRDFLUT",        ibl.brdfLUTHandle);
-        mat->set("uMaxPrefilteredLOD", maxLOD);
-    }
-
     // ── HDR render target ─────────────────────────────────────────────────────
     const auto fbSize0    = window.getFrameBufferSize();
     const auto hdrRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
@@ -173,6 +201,63 @@ int main() {
         .depth  = sonnet::api::render::RenderBufferDesc{},
     });
     const auto hdrTexHandle = renderer.colorTextureHandle(hdrRTHandle, 0);
+
+    // ── Normals pre-pass render target (RGBA16F color + Depth24 sampled) ─────
+    const auto normalsRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+        .width  = fbSize0.x,
+        .height = fbSize0.y,
+        .colors = {{
+            .format      = sonnet::api::render::TextureFormat::RGBA16F,
+            .samplerDesc = {
+                .minFilter = sonnet::api::render::MinFilter::Linear,
+                .magFilter = sonnet::api::render::MagFilter::Linear,
+                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+            },
+        }},
+        .depth  = sonnet::api::render::TextureAttachmentDesc{
+            .format      = sonnet::api::render::TextureFormat::Depth24,
+            .samplerDesc = {
+                .minFilter = sonnet::api::render::MinFilter::Linear,
+                .magFilter = sonnet::api::render::MagFilter::Linear,
+                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+            },
+        },
+    });
+    const auto normalsTex      = renderer.colorTextureHandle(normalsRTHandle, 0);
+    const auto normalsDepthTex = renderer.depthTextureHandle(normalsRTHandle);
+
+    // ── SSAO render targets (R32F, single-channel AO) ─────────────────────────
+    const auto makeR32FRT = [&]() {
+        return renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+            .width  = fbSize0.x,
+            .height = fbSize0.y,
+            .colors = {{
+                .format      = sonnet::api::render::TextureFormat::R32F,
+                .samplerDesc = {
+                    .minFilter = sonnet::api::render::MinFilter::Linear,
+                    .magFilter = sonnet::api::render::MagFilter::Linear,
+                    .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                    .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+                },
+            }},
+        });
+    };
+    const auto ssaoRTHandle     = makeR32FRT();
+    const auto ssaoBlurRTHandle = makeR32FRT();
+    const auto ssaoTex          = renderer.colorTextureHandle(ssaoRTHandle,     0);
+    const auto ssaoBlurTex      = renderer.colorTextureHandle(ssaoBlurRTHandle, 0);
+
+    // Attach IBL + SSAO textures to every lit material instance.
+    const float maxLOD = static_cast<float>(ibl.prefilteredLODs - 1);
+    for (auto *mat : {&cubeMat, &floorMat}) {
+        mat->addTexture("uIrradianceMap",  ibl.irradianceHandle);
+        mat->addTexture("uPrefilteredMap", ibl.prefilteredHandle);
+        mat->addTexture("uBRDFLUT",        ibl.brdfLUTHandle);
+        mat->set("uMaxPrefilteredLOD", maxLOD);
+        mat->addTexture("uSSAO",           ssaoBlurTex);
+    }
 
     // ── Tone-mapping fullscreen quad ──────────────────────────────────────────
     const auto quadMesh       = sonnet::primitives::makeQuad({2.0f, 2.0f});
@@ -243,6 +328,41 @@ int main() {
     tonemapMat.addTexture("uHdrColor",      hdrTexHandle);
     tonemapMat.addTexture("uBloomTexture",  bloomBrightTex); // final blur result ends up here
 
+    // ── Pre-pass shader and material (outputs view-space normals) ─────────────
+    const auto prepassVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/prepass.vert");
+    const auto prepassFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/prepass.frag");
+    const auto prepassShader  = renderer.createShader(prepassVertSrc, prepassFragSrc);
+    const auto prepassMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = prepassShader,
+        .renderState  = {},
+    });
+    sonnet::api::render::MaterialInstance prepassMat{prepassMatTmpl};
+
+    // ── SSAO shader and material ───────────────────────────────────────────────
+    const auto ssaoVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao.vert");
+    const auto ssaoFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao.frag");
+    const auto ssaoShader  = renderer.createShader(ssaoVertSrc, ssaoFragSrc);
+    const auto ssaoMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = ssaoShader,
+        .renderState  = noDepthState,
+    });
+    sonnet::api::render::MaterialInstance ssaoMat{ssaoMatTmpl};
+    ssaoMat.addTexture("uNormalMap", normalsTex);
+    ssaoMat.addTexture("uDepthMap",  normalsDepthTex);
+    ssaoMat.addTexture("uNoiseMap",  ssaoNoiseHandle);
+    for (int i = 0; i < 64; ++i)
+        ssaoMat.set("uKernel[" + std::to_string(i) + "]", ssaoKernel[i]);
+
+    // ── SSAO blur shader and material ─────────────────────────────────────────
+    const auto ssaoBlurFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao_blur.frag");
+    const auto ssaoBlurShader  = renderer.createShader(ssaoVertSrc, ssaoBlurFragSrc);
+    const auto ssaoBlurMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = ssaoBlurShader,
+        .renderState  = noDepthState,
+    });
+    sonnet::api::render::MaterialInstance ssaoBlurMat{ssaoBlurMatTmpl};
+    ssaoBlurMat.addTexture("uSSAOTexture", ssaoTex);
+
     // ── Skybox ────────────────────────────────────────────────────────────────
     const auto skyVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.vert");
     const auto skyFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.frag");
@@ -271,6 +391,9 @@ int main() {
     float     bloomThreshold  = 0.8f;
     float     bloomIntensity  = 0.5f;
     int       bloomIterations = 3;
+    bool      ssaoEnabled     = true;
+    float     ssaoRadius      = 0.5f;
+    float     ssaoBias        = 0.025f;
     bool      uiMode          = false;
 
     // Per-object PBR scalar multipliers — applied on top of the ORM texture.
@@ -353,6 +476,92 @@ int main() {
         renderer.render(shadowCtx, shadowQueue);
         renderer.endFrame();
 
+        // ── Camera matrices (shared across pre-pass, SSAO, and lit pass) ──────
+        const float aspect = fbSize.x > 0 && fbSize.y > 0
+            ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
+            : 16.0f / 9.0f;
+        const glm::mat4 viewMat    = cameraObj.camera->viewMatrix(cameraObj.transform);
+        const glm::mat4 projMat    = cameraObj.camera->projectionMatrix(aspect);
+        const glm::mat4 invProjMat = glm::inverse(projMat);
+        const glm::vec3 camPos     = cameraObj.transform.getWorldPosition();
+
+        // Post-process helpers (identity view/proj + fullscreen quad renderer).
+        const glm::mat4 identity{1.0f};
+        const glm::vec3 origin{0.0f};
+        sonnet::api::render::FrameContext ppCtx{
+            .viewMatrix       = identity,
+            .projectionMatrix = identity,
+            .viewPosition     = origin,
+            .viewportWidth    = fbSize.x,
+            .viewportHeight   = fbSize.y,
+            .deltaTime        = 0.0f,
+        };
+        const auto fullscreenQuad = [&](sonnet::api::render::MaterialInstance &mat) {
+            std::vector<sonnet::api::render::RenderItem> q{{
+                .mesh        = quadMeshHandle,
+                .material    = mat,
+                .modelMatrix = identity,
+            }};
+            renderer.beginFrame();
+            renderer.render(ppCtx, q);
+            renderer.endFrame();
+        };
+
+        // ── Pass 1.5: geometry pre-pass → normalsRT ────────────────────────────
+        renderer.bindRenderTarget(normalsRTHandle);
+        backend.setViewport(fbSize.x, fbSize.y);
+        glDepthMask(GL_TRUE);
+        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}}, .depth = 1.0f });
+
+        {
+            sonnet::api::render::FrameContext preCtx{
+                .viewMatrix       = viewMat,
+                .projectionMatrix = projMat,
+                .viewPosition     = camPos,
+                .viewportWidth    = fbSize.x,
+                .viewportHeight   = fbSize.y,
+                .deltaTime        = 0.0f,
+            };
+            std::vector<sonnet::api::render::RenderItem> preQueue;
+            for (const auto &obj : scene.objects()) {
+                if (!obj->render) continue;
+                preQueue.push_back({
+                    .mesh        = obj->render->mesh,
+                    .material    = prepassMat,
+                    .modelMatrix = obj->transform.getModelMatrix(),
+                });
+            }
+            renderer.beginFrame();
+            renderer.render(preCtx, preQueue);
+            renderer.endFrame();
+        }
+
+        // ── Pass 1.6: SSAO → ssaoRT (or clear to white if disabled) ──────────
+        if (ssaoEnabled) {
+            renderer.bindRenderTarget(ssaoRTHandle);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
+            ssaoMat.set("uProjection",    projMat);
+            ssaoMat.set("uInvProjection", invProjMat);
+            ssaoMat.set("uNoiseScale",    glm::vec2{
+                static_cast<float>(fbSize.x) / 4.0f,
+                static_cast<float>(fbSize.y) / 4.0f});
+            ssaoMat.set("uRadius", ssaoRadius);
+            ssaoMat.set("uBias",   ssaoBias);
+            fullscreenQuad(ssaoMat);
+
+            // Pass 1.7: SSAO blur → ssaoBlurRT
+            renderer.bindRenderTarget(ssaoBlurRTHandle);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
+            fullscreenQuad(ssaoBlurMat);
+        } else {
+            // Fill ssaoBlurRT with 1.0 (no occlusion).
+            renderer.bindRenderTarget(ssaoBlurRTHandle);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
+        }
+
         // ── Pass 2: HDR scene ──────────────────────────────────────────────────
         renderer.bindRenderTarget(hdrRTHandle);
         backend.setViewport(fbSize.x, fbSize.y);
@@ -369,13 +578,6 @@ int main() {
         floorMat.set("uRoughness",  floorRoughness);
         lampMat.set("uEmissiveColor",    lampColor);
         lampMat.set("uEmissiveStrength", lampStrength);
-
-        const float aspect = fbSize.x > 0 && fbSize.y > 0
-            ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
-            : 16.0f / 9.0f;
-        const glm::mat4 viewMat = cameraObj.camera->viewMatrix(cameraObj.transform);
-        const glm::mat4 projMat = cameraObj.camera->projectionMatrix(aspect);
-        const glm::vec3 camPos  = cameraObj.transform.getWorldPosition();
 
         sonnet::api::render::FrameContext ctx{
             .viewMatrix       = viewMat,
@@ -408,26 +610,6 @@ int main() {
         renderer.endFrame();
 
         // ── Pass 2.5: bloom ────────────────────────────────────────────────────
-        const glm::mat4 identity{1.0f};
-        const glm::vec3 origin{0.0f};
-        sonnet::api::render::FrameContext ppCtx{
-            .viewMatrix       = identity,
-            .projectionMatrix = identity,
-            .viewPosition     = origin,
-            .viewportWidth    = fbSize.x,
-            .viewportHeight   = fbSize.y,
-            .deltaTime        = 0.0f,
-        };
-        const auto fullscreenQuad = [&](sonnet::api::render::MaterialInstance &mat) {
-            std::vector<sonnet::api::render::RenderItem> q{{
-                .mesh        = quadMeshHandle,
-                .material    = mat,
-                .modelMatrix = identity,
-            }};
-            renderer.beginFrame();
-            renderer.render(ppCtx, q);
-            renderer.endFrame();
-        };
 
         // Bright-pass extract.
         renderer.bindRenderTarget(bloomBrightRT);
@@ -488,6 +670,12 @@ int main() {
                 ImGui::SliderFloat("Threshold##bloom",  &bloomThreshold,  0.5f, 3.0f);
                 ImGui::SliderFloat("Intensity##bloom",  &bloomIntensity,  0.0f, 3.0f);
                 ImGui::SliderInt  ("Iterations##bloom", &bloomIterations, 1,    8);
+            }
+
+            if (ImGui::CollapsingHeader("SSAO", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox   ("Enable##ssao",  &ssaoEnabled);
+                ImGui::SliderFloat("Radius##ssao",  &ssaoRadius, 0.1f, 1.0f);
+                ImGui::SliderFloat("Bias##ssao",    &ssaoBias,   0.005f, 0.1f, "%.3f");
             }
 
             if (ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen)) {

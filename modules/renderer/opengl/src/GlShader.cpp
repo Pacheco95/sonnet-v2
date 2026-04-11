@@ -44,8 +44,9 @@ void GlShader::resolveUniforms() {
         else if (glType == GL_FLOAT_VEC3) type = core::UniformType::Vec3;
         else if (glType == GL_FLOAT_VEC4) type = core::UniformType::Vec4;
         else if (glType == GL_FLOAT_MAT4) type = core::UniformType::Mat4;
-        else if (glType == GL_SAMPLER_2D) type = core::UniformType::Sampler;
-        else if (glType == GL_SAMPLER_CUBE) type = core::UniformType::Sampler;
+        else if (glType == GL_SAMPLER_2D)        type = core::UniformType::Sampler;
+        else if (glType == GL_SAMPLER_CUBE)      type = core::UniformType::Sampler;
+        else if (glType == GL_SAMPLER_2D_SHADOW) type = core::UniformType::Sampler;
         // Unknown uniform types are silently skipped.
 
         m_uniforms.emplace(std::move(name), core::UniformDescriptor{type, location});

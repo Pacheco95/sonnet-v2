@@ -29,6 +29,7 @@ uniform samplerCube     uIrradianceMap;     // diffuse IBL
 uniform samplerCube     uPrefilteredMap;    // specular IBL (mipped by roughness)
 uniform sampler2D       uBRDFLUT;           // GGX split-sum LUT
 uniform float           uMaxPrefilteredLOD; // mip count - 1 in uPrefilteredMap
+uniform sampler2D       uSSAO;              // screen-space AO (blurred, R channel)
 
 // ── GGX Cook-Torrance BRDF ────────────────────────────────────────────────────
 
@@ -126,7 +127,10 @@ void main() {
     vec2 brdf            = texture(uBRDFLUT, vec2(NdotV, roughness)).rg;
     vec3 specularIBL     = prefilteredColor * (F_amb * brdf.x + brdf.y);
 
-    vec3 ambient = (diffuseIBL + specularIBL) * ao;
+    // Combine ORM ambient-occlusion with screen-space AO.
+    vec2  screenUV  = gl_FragCoord.xy / vec2(textureSize(uSSAO, 0));
+    float ssao      = texture(uSSAO, screenUV).r;
+    vec3 ambient = (diffuseIBL + specularIBL) * ao * ssao;
 
     fragColor = vec4(ambient + Lo, 1.0);
 }
