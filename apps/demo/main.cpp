@@ -22,8 +22,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // ── Fly camera ────────────────────────────────────────────────────────────────
@@ -451,6 +453,10 @@ int main() {
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
 
+    // Scene hierarchy selection state.
+    sonnet::world::GameObject *selectedObject = nullptr;
+    glm::vec3                  editEuler{0.0f}; // Euler angles (degrees) for selected object
+
     while (!window.shouldClose()) {
         const double now = glfwGetTime();
         const float  dt  = static_cast<float>(now - prevTime);
@@ -775,6 +781,74 @@ int main() {
 
             ImGui::End();
         }
+
+        // ── Scene Hierarchy window ─────────────────────────────────────────────
+        ImGui::Begin("Scene Hierarchy");
+
+        // Build a map from Transform* -> GameObject* for parent lookup.
+        std::unordered_map<const sonnet::world::Transform *, sonnet::world::GameObject *> tfToObj;
+        for (auto &obj : scene.objects())
+            tfToObj[&obj->transform] = obj.get();
+
+        // Recursive node draw.
+        std::function<void(sonnet::world::GameObject &)> drawNode =
+            [&](sonnet::world::GameObject &obj) {
+                // Collect child GameObjects (transform children that are scene objects).
+                std::vector<sonnet::world::GameObject *> childObjs;
+                for (auto *childTf : obj.transform.children()) {
+                    auto it = tfToObj.find(childTf);
+                    if (it != tfToObj.end())
+                        childObjs.push_back(it->second);
+                }
+
+                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                                           ImGuiTreeNodeFlags_SpanAvailWidth;
+                if (childObjs.empty())
+                    flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+                if (&obj == selectedObject)
+                    flags |= ImGuiTreeNodeFlags_Selected;
+
+                bool opened = ImGui::TreeNodeEx(obj.name.c_str(), flags);
+                if (ImGui::IsItemClicked()) {
+                    if (selectedObject != &obj) {
+                        selectedObject = &obj;
+                        editEuler = glm::degrees(glm::eulerAngles(
+                            obj.transform.getLocalRotation()));
+                    }
+                }
+                if (opened && !childObjs.empty()) {
+                    for (auto *child : childObjs)
+                        drawNode(*child);
+                    ImGui::TreePop();
+                }
+            };
+
+        // Draw only root objects (no transform parent).
+        for (auto &obj : scene.objects()) {
+            if (obj->transform.getParent() == nullptr)
+                drawNode(*obj);
+        }
+
+        // Transform editor for selected object.
+        if (selectedObject) {
+            ImGui::Separator();
+            ImGui::TextDisabled("%s", selectedObject->name.c_str());
+
+            glm::vec3 pos = selectedObject->transform.getLocalPosition();
+            if (ImGui::DragFloat3("Position##hier", &pos.x, 0.01f))
+                selectedObject->transform.setLocalPosition(pos);
+
+            if (ImGui::DragFloat3("Rotation##hier", &editEuler.x, 0.5f))
+                selectedObject->transform.setLocalRotation(
+                    glm::quat(glm::radians(editEuler)));
+
+            glm::vec3 scl = selectedObject->transform.getLocalScale();
+            if (ImGui::DragFloat3("Scale##hier", &scl.x, 0.01f, 0.001f, 100.0f))
+                selectedObject->transform.setLocalScale(scl);
+        }
+
+        ImGui::End();
+
         imgui.end();
 
         window.swapBuffers();
