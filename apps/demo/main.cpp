@@ -85,7 +85,6 @@ int main() {
     sonnet::input::InputSystem input;
     sonnet::window::GLFWInputAdapter adapter{input};
     window.setInputAdapter(&adapter);
-    window.captureCursor();
 
     sonnet::renderer::opengl::GlRendererBackend backend;
     backend.initialize();
@@ -249,14 +248,18 @@ int main() {
     const auto ssaoTex          = renderer.colorTextureHandle(ssaoRTHandle,     0);
     const auto ssaoBlurTex      = renderer.colorTextureHandle(ssaoBlurRTHandle, 0);
 
-    // Attach IBL + SSAO textures to every lit material instance.
+    // Attach IBL + SSAO textures to every object that uses the lit material template.
     const float maxLOD = static_cast<float>(ibl.prefilteredLODs - 1);
-    for (auto *mat : {&cubeMat, &floorMat}) {
-        mat->addTexture("uIrradianceMap",  ibl.irradianceHandle);
-        mat->addTexture("uPrefilteredMap", ibl.prefilteredHandle);
-        mat->addTexture("uBRDFLUT",        ibl.brdfLUTHandle);
-        mat->set("uMaxPrefilteredLOD", maxLOD);
-        mat->addTexture("uSSAO",           ssaoBlurTex);
+    const auto litTemplate = loaded.materials.at("lit");
+    for (auto &[objName, obj] : loaded.objects) {
+        if (!obj->render) continue;
+        if (obj->render->material.templateHandle() != litTemplate) continue;
+        auto &mat = obj->render->material;
+        mat.addTexture("uIrradianceMap",  ibl.irradianceHandle);
+        mat.addTexture("uPrefilteredMap", ibl.prefilteredHandle);
+        mat.addTexture("uBRDFLUT",        ibl.brdfLUTHandle);
+        mat.set("uMaxPrefilteredLOD", maxLOD);
+        mat.addTexture("uSSAO",           ssaoBlurTex);
     }
 
     // ── Tone-mapping fullscreen quad ──────────────────────────────────────────
@@ -418,16 +421,17 @@ int main() {
         if (input.isKeyJustPressed(sonnet::api::input::Key::Escape))
             window.requestClose();
 
-        if (input.isKeyJustPressed(sonnet::api::input::Key::Tab)) {
+        if (input.isKeyJustPressed(sonnet::api::input::Key::Tab))
             uiMode = !uiMode;
-            if (uiMode) window.releaseCursor();
-            else        window.captureCursor();
-        }
 
         const auto fbSize = window.getFrameBufferSize();
 
-        if (!uiMode)
+        if (uiMode) {
+            window.releaseCursor();
+        } else if (input.isMouseDown(sonnet::api::input::MouseButton::Right)) {
+            window.captureCursor();
             flyCamera.update(dt, input);
+        }
 
         rotation += rotationSpeed * dt;
         // Arm orbits around Y — the cube follows as a child.

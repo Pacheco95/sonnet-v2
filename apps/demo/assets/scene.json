@@ -22,9 +22,10 @@
             }
         },
         "meshes": {
-            "cube":   "cube.obj",
-            "floor":  { "primitive": "box",    "size": [6.0, 0.1, 6.0] },
-            "sphere": { "primitive": "sphere", "segmentsX": 24, "segmentsY": 12 }
+            "cube":    "cube.obj",
+            "floor":   { "primitive": "box",    "size": [6.0, 0.1, 6.0] },
+            "sphere":  { "primitive": "sphere", "segmentsX": 24, "segmentsY": 12 },
+            "helmet":  { "model": "models/DamagedHelmet.glb", "material": "lit" }
         },
         "textures": {
             "metalAlbedo": "metal034_albedo.jpg",
@@ -43,7 +44,7 @@
         {
             "name":     "Cube",
             "parent":   "Arm",
-            "position": [1.5, 0.0, 0.0],
+            "position": [1.0, 0.0, 0.0],
             "render": {
                 "mesh":     "cube",
                 "material": "lit",
@@ -79,6 +80,11 @@
             "position": [0.0, 0.6, 0.0],
             "scale":    [0.12, 0.12, 0.12],
             "render":   { "mesh": "sphere", "material": "lamp" }
+        },
+        {
+            "name":     "Helmet",
+            "position": [-2.5, 0.5, 0.0],
+            "render":   { "mesh": "helmet", "textures": { "uShadowMap": "shadowDepth" } }
         }
     ]
 }

@@ -150,6 +150,14 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
     std::unordered_map<std::string, core::ShaderHandle>              shaders;
     std::unordered_map<std::string, core::MaterialTemplateHandle>    materials;
 
+    // Model entries: "meshName": { "model": "path.glb", "material": "lit" }
+    // Each model holds multiple sub-meshes and their decoded PBR materials.
+    struct ModelEntry {
+        std::vector<loaders::LoadedMesh> loadedMeshes;
+        std::string                      materialName; // scene material template to use
+    };
+    std::unordered_map<std::string, ModelEntry> modelEntries;
+
     if (renderer && doc.contains("assets")) {
         const auto &assets = doc["assets"];
 
@@ -187,8 +195,19 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
         }
 
         if (assets.contains("meshes")) {
-            for (const auto &[name, spec] : assets["meshes"].items())
-                meshes[name] = loadMesh(spec, assetsDir, *renderer);
+            for (const auto &[name, spec] : assets["meshes"].items()) {
+                if (spec.is_object() && spec.contains("model")) {
+                    // glTF/GLB model — load all sub-meshes + materials.
+                    const std::string modelPath  = assetsDir + "/" + spec.at("model").get<std::string>();
+                    const std::string matName    = spec.value("material", "lit");
+                    modelEntries[name] = ModelEntry{
+                        loaders::ModelLoader::loadAll(modelPath),
+                        matName,
+                    };
+                } else {
+                    meshes[name] = loadMesh(spec, assetsDir, *renderer);
+                }
+            }
         }
 
         if (assets.contains("textures")) {
@@ -242,23 +261,87 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
         // Render component (requires renderer + resolved assets)
         if (renderer && spec.contains("render")) {
             const auto &rc = spec["render"];
+            const std::string meshName = rc.at("mesh").get<std::string>();
 
-            auto meshIt = meshes.find(rc.at("mesh").get<std::string>());
-            auto matIt  = materials.find(rc.at("material").get<std::string>());
+            // ── Model (multi-mesh glTF) ────────────────────────────────────────
+            if (auto modelIt = modelEntries.find(meshName); modelIt != modelEntries.end()) {
+                const auto &entry = modelIt->second;
+                auto matTmplIt    = materials.find(entry.materialName);
+                if (matTmplIt == materials.end())
+                    throw std::runtime_error("SceneLoader: model material '" +
+                                             entry.materialName + "' not found");
 
-            if (meshIt != meshes.end() && matIt != materials.end()) {
-                MaterialInstance mat{matIt->second};
-                if (rc.contains("textures")) {
-                    for (const auto &[uniform, texName] : rc["textures"].items()) {
-                        auto texIt = textures.find(texName.get<std::string>());
-                        if (texIt != textures.end())
-                            mat.addTexture(uniform, texIt->second);
+                for (std::size_t i = 0; i < entry.loadedMeshes.size(); ++i) {
+                    const auto &lm = entry.loadedMeshes[i];
+                    const std::string childName =
+                        name + "/" + (lm.name.empty() ? std::to_string(i) : lm.name);
+
+                    auto &child = scene.createObject(childName, &obj);
+                    result.objects[childName] = &child;
+
+                    auto gpuMesh = renderer->createMesh(lm.mesh);
+                    MaterialInstance childMat{matTmplIt->second};
+
+                    // Helper: create a GPU texture from a MeshTexture.
+                    auto uploadTex = [&](const loaders::MeshTexture &tex) -> core::GPUTextureHandle {
+                        const ColorSpace cs = tex.srgb ? ColorSpace::sRGB : ColorSpace::Linear;
+                        if (tex.embedded && tex.cpuData) {
+                            const auto &cd = *tex.cpuData;
+                            const auto fmt = cd.channels == 4 ? TextureFormat::RGBA8 : TextureFormat::RGB8;
+                            return renderer->createTexture(
+                                TextureDesc{.size = {cd.width, cd.height},
+                                            .format = fmt, .colorSpace = cs},
+                                {}, cd);
+                        }
+                        auto cpuTex = loaders::TextureLoader::load(tex.path);
+                        const auto fmt = cpuTex.channels == 4 ? TextureFormat::RGBA8 : TextureFormat::RGB8;
+                        return renderer->createTexture(
+                            TextureDesc{.size = {cpuTex.width, cpuTex.height},
+                                        .format = fmt, .colorSpace = cs},
+                            {}, cpuTex);
+                    };
+
+                    if (lm.material.albedo.valid())
+                        childMat.addTexture("uAlbedo",    uploadTex(lm.material.albedo));
+                    if (lm.material.normal.valid())
+                        childMat.addTexture("uNormalMap", uploadTex(lm.material.normal));
+                    if (lm.material.orm.valid())
+                        childMat.addTexture("uORM",       uploadTex(lm.material.orm));
+
+                    // Apply per-instance render overrides from scene JSON.
+                    if (rc.contains("textures")) {
+                        for (const auto &[uniform, texName] : rc["textures"].items()) {
+                            auto texIt = textures.find(texName.get<std::string>());
+                            if (texIt != textures.end())
+                                childMat.addTexture(uniform, texIt->second);
+                        }
                     }
+
+                    child.render = world::RenderComponent{
+                        .mesh     = gpuMesh,
+                        .material = std::move(childMat),
+                    };
                 }
-                obj.render = world::RenderComponent{
-                    .mesh     = meshIt->second,
-                    .material = std::move(mat),
-                };
+
+            // ── Single mesh ────────────────────────────────────────────────────
+            } else {
+                auto meshIt = meshes.find(meshName);
+                auto matIt  = materials.find(rc.at("material").get<std::string>());
+
+                if (meshIt != meshes.end() && matIt != materials.end()) {
+                    MaterialInstance mat{matIt->second};
+                    if (rc.contains("textures")) {
+                        for (const auto &[uniform, texName] : rc["textures"].items()) {
+                            auto texIt = textures.find(texName.get<std::string>());
+                            if (texIt != textures.end())
+                                mat.addTexture(uniform, texIt->second);
+                        }
+                    }
+                    obj.render = world::RenderComponent{
+                        .mesh     = meshIt->second,
+                        .material = std::move(mat),
+                    };
+                }
             }
         }
     }
