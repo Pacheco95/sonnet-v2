@@ -9,6 +9,7 @@ uniform sampler2D uNoiseMap;  // 4x4 random rotation texture (tiled)
 uniform vec3  uKernel[64];    // hemisphere sample offsets in tangent space
 uniform mat4  uProjection;    // camera projection (for screen-space projection)
 uniform mat4  uInvProjection; // inverse projection (for position reconstruction)
+uniform mat4  uView;          // view matrix — transforms world-space G-buffer normals to view space
 uniform vec2  uNoiseScale;    // vec2(viewportW/4, viewportH/4) for noise tiling
 uniform float uRadius;        // SSAO sampling radius in view space
 uniform float uBias;          // depth bias to avoid self-occlusion
@@ -25,7 +26,9 @@ vec3 viewPosFromDepth(vec2 uv) {
 void main() {
     // View-space position and normal of this fragment.
     vec3 fragPos = viewPosFromDepth(vUV);
-    vec3 normal  = normalize(texture(uNormalMap, vUV).xyz);
+    // G-buffer stores world-space normals; transform to view space for SSAO.
+    vec3 worldNormal = normalize(texture(uNormalMap, vUV).xyz);
+    vec3 normal      = normalize(mat3(uView) * worldNormal);
 
     // Build a random TBN matrix using the noise texture (tiled).
     // The noise texture stores raw float values in [-1,1,0] — sample directly,

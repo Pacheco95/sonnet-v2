@@ -1,8 +1,8 @@
 {
     "assets": {
         "shaders": {
-            "lit":      { "vert": "shaders/lit.vert",      "frag": "shaders/lit.frag"      },
-            "emissive": { "vert": "shaders/emissive.vert", "frag": "shaders/emissive.frag" }
+            "lit":      { "vert": "shaders/gbuffer.vert",          "frag": "shaders/gbuffer.frag"          },
+            "emissive": { "vert": "shaders/emissive.vert",         "frag": "shaders/gbuffer_emissive.frag" }
         },
         "materials": {
             "lit": {
@@ -53,8 +53,7 @@
                 "textures": {
                     "uAlbedo":    "metalAlbedo",
                     "uNormalMap": "metalNormal",
-                    "uORM":       "metalORM",
-                    "uShadowMap": "shadowDepth"
+                    "uORM":       "metalORM"
                 }
             }
         },
@@ -67,8 +66,7 @@
                 "textures": {
                     "uAlbedo":    "tilesAlbedo",
                     "uNormalMap": "tilesNormal",
-                    "uORM":       "tilesORM",
-                    "uShadowMap": "shadowDepth"
+                    "uORM":       "tilesORM"
                 }
             }
         },
@@ -86,7 +84,7 @@
         {
             "name":     "Helmet",
             "position": [-2.5, 0.5, 0.0],
-            "render":   { "mesh": "helmet", "textures": { "uShadowMap": "shadowDepth" } }
+            "render":   { "mesh": "helmet" }
         }
     ]
 }

@@ -203,31 +203,40 @@ int main() {
     });
     const auto hdrTexHandle = renderer.colorTextureHandle(hdrRTHandle, 0);
 
-    // ── Normals pre-pass render target (RGBA16F color + Depth24 sampled) ─────
-    const auto normalsRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+    // ── G-buffer render target (3 × RGBA16F colour + Depth24 texture) ───────────
+    // Attachment 0: albedo.rgb + roughness.a
+    // Attachment 1: world-space normal.rgb + metallic.a
+    // Attachment 2: emissive.rgb + ORM-ao.a
+    // Depth sampled by SSAO, sky discard, and FXAA edge gate.
+    const auto nearestClamp = sonnet::api::render::SamplerDesc{
+        .minFilter = sonnet::api::render::MinFilter::Nearest,
+        .magFilter = sonnet::api::render::MagFilter::Nearest,
+        .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+        .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+    };
+    const auto linearClamp = sonnet::api::render::SamplerDesc{
+        .minFilter = sonnet::api::render::MinFilter::Linear,
+        .magFilter = sonnet::api::render::MagFilter::Linear,
+        .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+        .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+    };
+    const auto gbufRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
         .width  = fbSize0.x,
         .height = fbSize0.y,
-        .colors = {{
-            .format      = sonnet::api::render::TextureFormat::RGBA16F,
-            .samplerDesc = {
-                .minFilter = sonnet::api::render::MinFilter::Linear,
-                .magFilter = sonnet::api::render::MagFilter::Linear,
-                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
-                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
-            },
-        }},
+        .colors = {
+            { .format = sonnet::api::render::TextureFormat::RGBA16F, .samplerDesc = nearestClamp },
+            { .format = sonnet::api::render::TextureFormat::RGBA16F, .samplerDesc = nearestClamp },
+            { .format = sonnet::api::render::TextureFormat::RGBA16F, .samplerDesc = nearestClamp },
+        },
         .depth  = sonnet::api::render::TextureAttachmentDesc{
             .format      = sonnet::api::render::TextureFormat::Depth24,
-            .samplerDesc = {
-                .minFilter = sonnet::api::render::MinFilter::Linear,
-                .magFilter = sonnet::api::render::MagFilter::Linear,
-                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
-                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
-            },
+            .samplerDesc = linearClamp,
         },
     });
-    const auto normalsTex      = renderer.colorTextureHandle(normalsRTHandle, 0);
-    const auto normalsDepthTex = renderer.depthTextureHandle(normalsRTHandle);
+    const auto gbufAlbedoRoughTex    = renderer.colorTextureHandle(gbufRTHandle, 0);
+    const auto gbufNormalMetallicTex = renderer.colorTextureHandle(gbufRTHandle, 1);
+    const auto gbufEmissiveAOTex     = renderer.colorTextureHandle(gbufRTHandle, 2);
+    const auto gbufDepthTex          = renderer.depthTextureHandle(gbufRTHandle);
 
     // ── SSAO render targets (R32F, single-channel AO) ─────────────────────────
     const auto makeR32FRT = [&]() {
@@ -250,19 +259,7 @@ int main() {
     const auto ssaoTex          = renderer.colorTextureHandle(ssaoRTHandle,     0);
     const auto ssaoBlurTex      = renderer.colorTextureHandle(ssaoBlurRTHandle, 0);
 
-    // Attach IBL + SSAO textures to every object that uses the lit material template.
     const float maxLOD = static_cast<float>(ibl.prefilteredLODs - 1);
-    const auto litTemplate = loaded.materials.at("lit");
-    for (auto &[objName, obj] : loaded.objects) {
-        if (!obj->render) continue;
-        if (obj->render->material.templateHandle() != litTemplate) continue;
-        auto &mat = obj->render->material;
-        mat.addTexture("uIrradianceMap",  ibl.irradianceHandle);
-        mat.addTexture("uPrefilteredMap", ibl.prefilteredHandle);
-        mat.addTexture("uBRDFLUT",        ibl.brdfLUTHandle);
-        mat.set("uMaxPrefilteredLOD", maxLOD);
-        mat.addTexture("uSSAO",           ssaoBlurTex);
-    }
 
     // ── Tone-mapping fullscreen quad ──────────────────────────────────────────
     const auto quadMesh       = sonnet::primitives::makeQuad({2.0f, 2.0f});
@@ -359,17 +356,7 @@ int main() {
     });
     sonnet::api::render::MaterialInstance fxaaMat{fxaaMatTmpl};
     fxaaMat.addTexture("uScreen", ldrTex);
-    fxaaMat.addTexture("uDepth",  normalsDepthTex); // pre-pass depth for geometric edge gating
-
-    // ── Pre-pass shader and material (outputs view-space normals) ─────────────
-    const auto prepassVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/prepass.vert");
-    const auto prepassFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/prepass.frag");
-    const auto prepassShader  = renderer.createShader(prepassVertSrc, prepassFragSrc);
-    const auto prepassMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
-        .shaderHandle = prepassShader,
-        .renderState  = {},
-    });
-    sonnet::api::render::MaterialInstance prepassMat{prepassMatTmpl};
+    fxaaMat.addTexture("uDepth",  gbufDepthTex); // G-buffer depth for geometric edge gating
 
     // ── SSAO shader and material ───────────────────────────────────────────────
     const auto ssaoVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao.vert");
@@ -380,8 +367,8 @@ int main() {
         .renderState  = noDepthState,
     });
     sonnet::api::render::MaterialInstance ssaoMat{ssaoMatTmpl};
-    ssaoMat.addTexture("uNormalMap", normalsTex);
-    ssaoMat.addTexture("uDepthMap",  normalsDepthTex);
+    ssaoMat.addTexture("uNormalMap", gbufNormalMetallicTex); // G-buffer world normals
+    ssaoMat.addTexture("uDepthMap",  gbufDepthTex);          // G-buffer depth
     ssaoMat.addTexture("uNoiseMap",  ssaoNoiseHandle);
     for (int i = 0; i < 64; ++i)
         ssaoMat.set("uKernel[" + std::to_string(i) + "]", ssaoKernel[i]);
@@ -407,20 +394,41 @@ int main() {
     ssaoShowMat.addTexture("uSSAO", ssaoBlurTex);
 
     // ── Skybox ────────────────────────────────────────────────────────────────
+    // Depth testing is done in the shader: sky.frag reads gDepth and discards
+    // pixels where geometry was drawn (depth < 1.0), so no FBO depth is needed.
     const auto skyVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.vert");
     const auto skyFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.frag");
     const auto skyShader  = renderer.createShader(skyVertSrc, skyFragSrc);
     const auto skyMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = skyShader,
         .renderState  = {
-            .depthTest  = true,
+            .depthTest  = false,
             .depthWrite = false,
-            .depthFunc  = sonnet::api::render::DepthFunction::LessEqual,
             .cull       = sonnet::api::render::CullMode::None,
         },
     });
     sonnet::api::render::MaterialInstance skyMat{skyMatTmpl};
     skyMat.addTexture("uEnvMap", ibl.equirectHandle);
+    skyMat.addTexture("gDepth",  gbufDepthTex);
+
+    // ── Deferred lighting shader and material ─────────────────────────────────
+    const auto deferredFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/deferred_lighting.frag");
+    const auto deferredShader  = renderer.createShader(tonemapVertSrc, deferredFragSrc);
+    const auto deferredMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = deferredShader,
+        .renderState  = noDepthState,
+    });
+    sonnet::api::render::MaterialInstance deferredMat{deferredMatTmpl};
+    deferredMat.addTexture("gAlbedoRoughness", gbufAlbedoRoughTex);
+    deferredMat.addTexture("gNormalMetallic",  gbufNormalMetallicTex);
+    deferredMat.addTexture("gEmissiveAO",      gbufEmissiveAOTex);
+    deferredMat.addTexture("gDepth",           gbufDepthTex);
+    deferredMat.addTexture("uShadowMap",       shadowDepthHandle);
+    deferredMat.addTexture("uIrradianceMap",   ibl.irradianceHandle);
+    deferredMat.addTexture("uPrefilteredMap",  ibl.prefilteredHandle);
+    deferredMat.addTexture("uBRDFLUT",         ibl.brdfLUTHandle);
+    deferredMat.addTexture("uSSAO",            ssaoBlurTex);
+    deferredMat.set("uMaxPrefilteredLOD", maxLOD);
 
     FlyCamera flyCamera{cameraObj.transform};
 
@@ -557,73 +565,9 @@ int main() {
             renderer.endFrame();
         };
 
-        // ── Pass 1.5: geometry pre-pass → normalsRT ────────────────────────────
-        renderer.bindRenderTarget(normalsRTHandle);
-        backend.setViewport(fbSize.x, fbSize.y);
-        glDepthMask(GL_TRUE);
-        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}}, .depth = 1.0f });
-
-        {
-            sonnet::api::render::FrameContext preCtx{
-                .viewMatrix       = viewMat,
-                .projectionMatrix = projMat,
-                .viewPosition     = camPos,
-                .viewportWidth    = fbSize.x,
-                .viewportHeight   = fbSize.y,
-                .deltaTime        = 0.0f,
-            };
-            std::vector<sonnet::api::render::RenderItem> preQueue;
-            for (const auto &obj : scene.objects()) {
-                if (!obj->render) continue;
-                preQueue.push_back({
-                    .mesh        = obj->render->mesh,
-                    .material    = prepassMat,
-                    .modelMatrix = obj->transform.getModelMatrix(),
-                });
-            }
-            renderer.beginFrame();
-            renderer.render(preCtx, preQueue);
-            renderer.endFrame();
-        }
-
-        // ── Pass 1.6: SSAO → ssaoRT (or clear to white if disabled) ──────────
-        if (ssaoEnabled) {
-            renderer.bindRenderTarget(ssaoRTHandle);
-            backend.setViewport(fbSize.x, fbSize.y);
-            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
-            ssaoMat.set("uProjection",    projMat);
-            ssaoMat.set("uInvProjection", invProjMat);
-            ssaoMat.set("uNoiseScale",    glm::vec2{
-                static_cast<float>(fbSize.x) / 4.0f,
-                static_cast<float>(fbSize.y) / 4.0f});
-            ssaoMat.set("uRadius", ssaoRadius);
-            ssaoMat.set("uBias",   ssaoBias);
-            fullscreenQuad(ssaoMat);
-
-            // Pass 1.7: SSAO blur → ssaoBlurRT
-            renderer.bindRenderTarget(ssaoBlurRTHandle);
-            backend.setViewport(fbSize.x, fbSize.y);
-            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
-            fullscreenQuad(ssaoBlurMat);
-        } else {
-            // Fill ssaoBlurRT with 1.0 (no occlusion).
-            renderer.bindRenderTarget(ssaoBlurRTHandle);
-            backend.setViewport(fbSize.x, fbSize.y);
-            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
-        }
-
-        // ── Pass 2: HDR scene ──────────────────────────────────────────────────
-        renderer.bindRenderTarget(hdrRTHandle);
-        backend.setViewport(fbSize.x, fbSize.y);
-        backend.clear({
-            .colors = {{0, {0.1f, 0.1f, 0.15f, 1.0f}}},
-            .depth  = 1.0f,
-        });
-
-        cubeMat.set("uShadowBias",  shadowBias);
+        // ── Per-frame material updates ─────────────────────────────────────────
         cubeMat.set("uMetallic",    cubeMetallic);
         cubeMat.set("uRoughness",   cubeRoughness);
-        floorMat.set("uShadowBias", shadowBias);
         floorMat.set("uMetallic",   floorMetallic);
         floorMat.set("uRoughness",  floorRoughness);
         lampMat.set("uEmissiveColor",    lampColor);
@@ -652,20 +596,82 @@ int main() {
             .lightSpaceMatrix = lightSpaceMat,
         };
 
-        std::vector<sonnet::api::render::RenderItem> queue;
-        scene.buildRenderQueue(queue);
+        // ── Pass 1.5: G-buffer — all scene geometry → gbufRT ──────────────────
+        renderer.bindRenderTarget(gbufRTHandle);
+        backend.setViewport(fbSize.x, fbSize.y);
+        glDepthMask(GL_TRUE);
+        backend.clear({
+            .colors = {
+                {0, {0.0f, 0.0f, 0.0f, 1.0f}},
+                {1, {0.0f, 0.0f, 0.0f, 1.0f}},
+                {2, {0.0f, 0.0f, 0.0f, 1.0f}},
+            },
+            .depth = 1.0f,
+        });
+        {
+            std::vector<sonnet::api::render::RenderItem> gbufQueue;
+            scene.buildRenderQueue(gbufQueue);
+            renderer.beginFrame();
+            renderer.render(ctx, gbufQueue);
+            renderer.endFrame();
+        }
 
-        // ── Skybox item (drawn at depth=1.0 using LessEqual depth test) ──────
-        std::vector<sonnet::api::render::RenderItem> skyQueue{{
-            .mesh        = quadMeshHandle,
-            .material    = skyMat,
-            .modelMatrix = glm::mat4{1.0f},
-        }};
+        // ── Pass 1.6: SSAO → ssaoRT (or clear to white if disabled) ──────────
+        if (ssaoEnabled) {
+            renderer.bindRenderTarget(ssaoRTHandle);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
+            ssaoMat.set("uView",          viewMat);
+            ssaoMat.set("uProjection",    projMat);
+            ssaoMat.set("uInvProjection", invProjMat);
+            ssaoMat.set("uNoiseScale",    glm::vec2{
+                static_cast<float>(fbSize.x) / 4.0f,
+                static_cast<float>(fbSize.y) / 4.0f});
+            ssaoMat.set("uRadius", ssaoRadius);
+            ssaoMat.set("uBias",   ssaoBias);
+            fullscreenQuad(ssaoMat);
 
-        renderer.beginFrame();
-        renderer.render(ctx, queue);      // opaque geometry first
-        renderer.render(ctx, skyQueue);   // sky fills depth=1.0 regions
-        renderer.endFrame();
+            // Pass 1.7: SSAO blur → ssaoBlurRT
+            renderer.bindRenderTarget(ssaoBlurRTHandle);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
+            fullscreenQuad(ssaoBlurMat);
+        } else {
+            // Fill ssaoBlurRT with 1.0 (no occlusion).
+            renderer.bindRenderTarget(ssaoBlurRTHandle);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
+        }
+
+        // ── Pass 2: Deferred lighting — G-buffer + SSAO + IBL + shadow → hdrRT
+        renderer.bindRenderTarget(hdrRTHandle);
+        backend.setViewport(fbSize.x, fbSize.y);
+        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+        {
+            const glm::mat4 invViewProjMat = glm::inverse(projMat * viewMat);
+            deferredMat.set("uInvViewProj", invViewProjMat);
+            deferredMat.set("uShadowBias",  shadowBias);
+            std::vector<sonnet::api::render::RenderItem> dq{{
+                .mesh        = quadMeshHandle,
+                .material    = deferredMat,
+                .modelMatrix = identity,
+            }};
+            renderer.beginFrame();
+            renderer.render(ctx, dq);  // real ctx — auto-uploads lights, view pos, shadow matrix
+            renderer.endFrame();
+        }
+
+        // ── Pass 2.1: Sky → hdrRT (discards pixels where G-buffer depth < 1.0)
+        {
+            std::vector<sonnet::api::render::RenderItem> skyQ{{
+                .mesh        = quadMeshHandle,
+                .material    = skyMat,
+                .modelMatrix = identity,
+            }};
+            renderer.beginFrame();
+            renderer.render(ctx, skyQ);
+            renderer.endFrame();
+        }
 
         // ── Pass 2.5: bloom ────────────────────────────────────────────────────
 
