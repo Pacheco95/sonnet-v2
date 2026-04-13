@@ -307,6 +307,10 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                         childMat.addTexture("uNormalMap", uploadTex(lm.material.normal));
                     if (lm.material.orm.valid())
                         childMat.addTexture("uORM",       uploadTex(lm.material.orm));
+                    if (lm.material.emissive.valid()) {
+                        childMat.addTexture("uEmissive",    uploadTex(lm.material.emissive));
+                        childMat.set("uEmissiveFactor", lm.material.emissiveFactor);
+                    }
 
                     // Apply per-instance render overrides from scene JSON.
                     if (rc.contains("textures")) {

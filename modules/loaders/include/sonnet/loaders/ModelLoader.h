@@ -28,9 +28,11 @@ struct MeshMaterial {
     MeshTexture albedo;              // base colour (sRGB)
     MeshTexture normal;              // tangent-space normal map (linear)
     MeshTexture orm;                 // G=roughness, B=metallic per glTF convention (linear)
+    MeshTexture emissive;            // emissive/glow map (sRGB); valid() false if absent
     glm::vec4   albedoFactor{1.0f};
     float       metallicFactor  = 1.0f;
     float       roughnessFactor = 1.0f;
+    glm::vec3   emissiveFactor{0.0f}; // vec3 multiplier; [0,0,0] = no emission
     std::string name;
 };
 

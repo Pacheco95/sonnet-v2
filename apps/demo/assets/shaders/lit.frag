@@ -30,6 +30,8 @@ uniform samplerCube     uPrefilteredMap;    // specular IBL (mipped by roughness
 uniform sampler2D       uBRDFLUT;           // GGX split-sum LUT
 uniform float           uMaxPrefilteredLOD; // mip count - 1 in uPrefilteredMap
 uniform sampler2D       uSSAO;              // screen-space AO (blurred, R channel)
+uniform sampler2D       uEmissive;          // emissive/glow map (sRGB)
+uniform vec3            uEmissiveFactor;    // per-material emissive multiplier (default 0)
 
 // ── GGX Cook-Torrance BRDF ────────────────────────────────────────────────────
 
@@ -132,5 +134,6 @@ void main() {
     float ssao      = texture(uSSAO, screenUV).r;
     vec3 ambient = (diffuseIBL + specularIBL) * ao * ssao;
 
-    fragColor = vec4(ambient + Lo, 1.0);
+    vec3 emissive = texture(uEmissive, vTexCoord).rgb * uEmissiveFactor;
+    fragColor = vec4(ambient + Lo + emissive, 1.0);
 }

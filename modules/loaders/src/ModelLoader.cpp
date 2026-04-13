@@ -181,6 +181,12 @@ static MeshMaterial extractMaterial(const aiScene *scene,
     // glTF metallicRoughness texture lives in aiTextureType_UNKNOWN slot 0.
     m.orm = extractTex(scene, mat, aiTextureType_UNKNOWN, 0, modelDir, /*srgb=*/false);
 
+    // Emissive map + scalar factor.
+    m.emissive = extractTex(scene, mat, aiTextureType_EMISSIVE, 0, modelDir, /*srgb=*/true);
+    aiColor3D emissiveColor{0.0f, 0.0f, 0.0f};
+    mat->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveColor);
+    m.emissiveFactor = {emissiveColor.r, emissiveColor.g, emissiveColor.b};
+
     // Scalar factors.
     aiColor4D color;
     if (AI_SUCCESS == mat->Get(AI_MATKEY_BASE_COLOR, color))

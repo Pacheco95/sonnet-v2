@@ -8,9 +8,10 @@
             "lit": {
                 "shader": "lit",
                 "defaultValues": {
-                    "uShadowBias": 0.005,
-                    "uMetallic":  1.0,
-                    "uRoughness": 1.0
+                    "uShadowBias":     0.005,
+                    "uMetallic":       1.0,
+                    "uRoughness":      1.0,
+                    "uEmissiveFactor": [0.0, 0.0, 0.0]
                 }
             },
             "lamp": {
