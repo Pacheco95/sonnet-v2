@@ -13,6 +13,18 @@ struct DirLight {
     float intensity;
 };
 uniform DirLight        uDirLight;
+
+struct PointLight {
+    vec3  position;
+    vec3  color;
+    float intensity;
+    float constant;
+    float linear;
+    float quadratic;
+};
+#define MAX_POINT_LIGHTS 8
+uniform PointLight uPointLights[MAX_POINT_LIGHTS];
+uniform int        uPointLightCount;
 uniform vec3            uViewPosition;
 uniform sampler2D       uAlbedo;
 // Normal map in tangent space (OpenGL convention: +Y = up).
@@ -112,6 +124,27 @@ void main() {
     float shadow   = shadowFactor(N);
 
     vec3 Lo = (diffuse + specular) * radiance * NdotL * shadow;
+
+    // ── Point lights ──────────────────────────────────────────────────────────
+    for (int i = 0; i < uPointLightCount; ++i) {
+        vec3  Lp       = normalize(uPointLights[i].position - vFragPos);
+        vec3  Hp       = normalize(V + Lp);
+        float dist     = length(uPointLights[i].position - vFragPos);
+        float atten    = 1.0 / (uPointLights[i].constant
+                              + uPointLights[i].linear    * dist
+                              + uPointLights[i].quadratic * dist * dist);
+        float NdotLp   = max(dot(N, Lp), 0.0);
+        float NdotHp   = max(dot(N, Hp), 0.0);
+        float HdotVp   = max(dot(Hp, V), 0.0);
+        float Dp       = D_GGX(NdotHp, roughness);
+        float Gp       = G_Smith(NdotV, NdotLp, roughness);
+        vec3  Fp       = F_Schlick(HdotVp, F0);
+        vec3  spec_p   = (Dp * Gp * Fp) / max(4.0 * NdotV * NdotLp, 0.001);
+        vec3  kd_p     = (vec3(1.0) - Fp) * (1.0 - metallic);
+        vec3  diff_p   = kd_p * albedo / PI;
+        vec3  rad_p    = uPointLights[i].color * uPointLights[i].intensity * atten;
+        Lo += (diff_p + spec_p) * rad_p * NdotLp;
+    }
 
     // ── IBL ambient (split-sum approximation) ─────────────────────────────────
     // Fresnel at grazing angle (use NdotV, not HdotV, for the ambient term).

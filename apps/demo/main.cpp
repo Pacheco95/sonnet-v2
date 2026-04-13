@@ -583,6 +583,7 @@ int main() {
         lampMat.set("uEmissiveColor",    lampColor);
         lampMat.set("uEmissiveStrength", lampStrength);
 
+        const glm::vec3 lampPos = lamp.transform.getWorldPosition();
         sonnet::api::render::FrameContext ctx{
             .viewMatrix       = viewMat,
             .projectionMatrix = projMat,
@@ -594,6 +595,13 @@ int main() {
                 .direction = lightDir,
                 .color     = lightColor,
                 .intensity = lightIntensity,
+            },
+            .pointLights = {
+                sonnet::api::render::PointLight{
+                    .position  = lampPos,
+                    .color     = lampColor,
+                    .intensity = lampStrength,
+                },
             },
             .lightSpaceMatrix = lightSpaceMat,
         };
