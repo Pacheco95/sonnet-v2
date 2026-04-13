@@ -33,6 +33,8 @@ struct MeshMaterial {
     float       metallicFactor  = 1.0f;
     float       roughnessFactor = 1.0f;
     glm::vec3   emissiveFactor{0.0f}; // vec3 multiplier; [0,0,0] = no emission
+    bool        alphaMask   = false;  // true when glTF alphaMode == MASK
+    float       alphaCutoff = 0.5f;   // discard threshold (glTF default 0.5)
     std::string name;
 };
 

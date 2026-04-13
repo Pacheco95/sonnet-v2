@@ -34,7 +34,6 @@ void GlShader::resolveUniforms() {
         GLenum  glType = 0;
         glGetActiveUniform(m_program, i, maxLen, &length, &size, &glType, nameBuf.data());
 
-        const GLint location = glGetUniformLocation(m_program, nameBuf.data());
         std::string name(nameBuf.data(), static_cast<std::size_t>(length));
 
         core::UniformType type = core::UniformType::Float;
@@ -49,7 +48,22 @@ void GlShader::resolveUniforms() {
         else if (glType == GL_SAMPLER_2D_SHADOW) type = core::UniformType::Sampler;
         // Unknown uniform types are silently skipped.
 
-        m_uniforms.emplace(std::move(name), core::UniformDescriptor{type, location});
+        if (size > 1) {
+            // Array uniform — GL appends "[0]" to the name. Strip it and register
+            // each element individually so per-index uploads (e.g. uKernel[i]) work.
+            std::string base = name;
+            if (base.size() > 3 && base.substr(base.size() - 3) == "[0]")
+                base.resize(base.size() - 3);
+            for (GLint j = 0; j < size; ++j) {
+                const std::string elemName = base + "[" + std::to_string(j) + "]";
+                const GLint elemLoc = glGetUniformLocation(m_program, elemName.c_str());
+                if (elemLoc != -1)
+                    m_uniforms.emplace(elemName, core::UniformDescriptor{type, elemLoc});
+            }
+        } else {
+            const GLint location = glGetUniformLocation(m_program, name.c_str());
+            m_uniforms.emplace(std::move(name), core::UniformDescriptor{type, location});
+        }
     }
 }
 

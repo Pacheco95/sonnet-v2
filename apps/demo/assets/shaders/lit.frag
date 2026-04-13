@@ -44,6 +44,7 @@ uniform float           uMaxPrefilteredLOD; // mip count - 1 in uPrefilteredMap
 uniform sampler2D       uSSAO;              // screen-space AO (blurred, R channel)
 uniform sampler2D       uEmissive;          // emissive/glow map (sRGB)
 uniform vec3            uEmissiveFactor;    // per-material emissive multiplier (default 0)
+uniform float           uAlphaCutoff;       // > 0.0 enables alpha-mask discard
 
 // ── GGX Cook-Torrance BRDF ────────────────────────────────────────────────────
 
@@ -88,7 +89,9 @@ float shadowFactor(vec3 n) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 void main() {
     // Albedo — already linear (texture uploaded as GL_SRGB8, hardware linearises on sample)
-    vec3 albedo = texture(uAlbedo, vTexCoord).rgb;
+    vec4 albedoSample = texture(uAlbedo, vTexCoord);
+    if (uAlphaCutoff > 0.0 && albedoSample.a < uAlphaCutoff) discard;
+    vec3 albedo = albedoSample.rgb;
 
     // Normal from tangent-space map -> world space via TBN
     vec3 tangentNormal = texture(uNormalMap, vTexCoord).rgb * 2.0 - 1.0;

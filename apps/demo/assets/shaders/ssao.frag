@@ -28,7 +28,9 @@ void main() {
     vec3 normal  = normalize(texture(uNormalMap, vUV).xyz);
 
     // Build a random TBN matrix using the noise texture (tiled).
-    vec3 randomVec = normalize(texture(uNoiseMap, vUV * uNoiseScale).xyz * 2.0 - 1.0);
+    // The noise texture stores raw float values in [-1,1,0] — sample directly,
+    // no [0,1]->[−1,1] remapping needed (that would corrupt the stored values).
+    vec3 randomVec = normalize(texture(uNoiseMap, vUV * uNoiseScale).xyz);
     vec3 tangent   = normalize(randomVec - normal * dot(randomVec, normal));
     vec3 bitangent = cross(normal, tangent);
     mat3 TBN       = mat3(tangent, bitangent, normal);

@@ -7,6 +7,7 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <assimp/material.h>
+#include <assimp/GltfMaterial.h>
 
 #include <stb_image.h>
 
@@ -186,6 +187,14 @@ static MeshMaterial extractMaterial(const aiScene *scene,
     aiColor3D emissiveColor{0.0f, 0.0f, 0.0f};
     mat->Get(AI_MATKEY_COLOR_EMISSIVE, emissiveColor);
     m.emissiveFactor = {emissiveColor.r, emissiveColor.g, emissiveColor.b};
+
+    // Alpha mode (glTF MASK = discard-based cutout).
+    aiString alphaMode;
+    if (AI_SUCCESS == mat->Get(AI_MATKEY_GLTF_ALPHAMODE, alphaMode) &&
+        std::string_view{alphaMode.C_Str()} == "MASK") {
+        m.alphaMask = true;
+        mat->Get(AI_MATKEY_GLTF_ALPHACUTOFF, m.alphaCutoff);
+    }
 
     // Scalar factors.
     aiColor4D color;

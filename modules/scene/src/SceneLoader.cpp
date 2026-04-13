@@ -311,6 +311,8 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                         childMat.addTexture("uEmissive",    uploadTex(lm.material.emissive));
                         childMat.set("uEmissiveFactor", lm.material.emissiveFactor);
                     }
+                    if (lm.material.alphaMask)
+                        childMat.set("uAlphaCutoff", lm.material.alphaCutoff);
 
                     // Apply per-instance render overrides from scene JSON.
                     if (rc.contains("textures")) {

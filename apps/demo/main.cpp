@@ -276,6 +276,22 @@ int main() {
             .cull       = sonnet::api::render::CullMode::None,
         },
     });
+    // ── LDR render target (tonemap output; FXAA reads from this) ─────────────
+    const auto ldrRT = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+        .width  = fbSize0.x,
+        .height = fbSize0.y,
+        .colors = {{
+            .format      = sonnet::api::render::TextureFormat::RGBA8,
+            .samplerDesc = {
+                .minFilter = sonnet::api::render::MinFilter::Linear,
+                .magFilter = sonnet::api::render::MagFilter::Linear,
+                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+            },
+        }},
+    });
+    const auto ldrTex = renderer.colorTextureHandle(ldrRT, 0);
+
     // ── Bloom render targets (same resolution as HDR) ─────────────────────────
     const auto makeBloomRT = [&]() {
         return renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
@@ -331,6 +347,18 @@ int main() {
     tonemapMat.addTexture("uHdrColor",      hdrTexHandle);
     tonemapMat.addTexture("uBloomTexture",  bloomBrightTex); // final blur result ends up here
 
+    // ── FXAA shader and material ──────────────────────────────────────────────
+    const auto fxaaVertSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/fxaa.vert");
+    const auto fxaaFragSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/fxaa.frag");
+    const auto fxaaShader   = renderer.createShader(fxaaVertSrc, fxaaFragSrc);
+    const auto fxaaMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = fxaaShader,
+        .renderState  = noDepthState,
+    });
+    sonnet::api::render::MaterialInstance fxaaMat{fxaaMatTmpl};
+    fxaaMat.addTexture("uScreen", ldrTex);
+    fxaaMat.addTexture("uDepth",  normalsDepthTex); // pre-pass depth for geometric edge gating
+
     // ── Pre-pass shader and material (outputs view-space normals) ─────────────
     const auto prepassVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/prepass.vert");
     const auto prepassFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/prepass.frag");
@@ -366,6 +394,16 @@ int main() {
     sonnet::api::render::MaterialInstance ssaoBlurMat{ssaoBlurMatTmpl};
     ssaoBlurMat.addTexture("uSSAOTexture", ssaoTex);
 
+    // ── SSAO debug: show raw AO buffer as grayscale ───────────────────────────
+    const auto ssaoShowFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao_show.frag");
+    const auto ssaoShowShader  = renderer.createShader(ssaoVertSrc, ssaoShowFragSrc);
+    const auto ssaoShowMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = ssaoShowShader,
+        .renderState  = noDepthState,
+    });
+    sonnet::api::render::MaterialInstance ssaoShowMat{ssaoShowMatTmpl};
+    ssaoShowMat.addTexture("uSSAO", ssaoBlurTex);
+
     // ── Skybox ────────────────────────────────────────────────────────────────
     const auto skyVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.vert");
     const auto skyFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.frag");
@@ -395,8 +433,10 @@ int main() {
     float     bloomIntensity  = 0.5f;
     int       bloomIterations = 3;
     bool      ssaoEnabled     = true;
-    float     ssaoRadius      = 0.5f;
-    float     ssaoBias        = 0.025f;
+    float     ssaoRadius      = 1.5f;
+    float     ssaoBias        = 0.05f;
+    bool      ssaoShow        = false; // debug: show raw AO buffer
+    bool      fxaaEnabled     = true;
     bool      uiMode          = false;
 
     // Per-object PBR scalar multipliers — applied on top of the ORM texture.
@@ -644,15 +684,32 @@ int main() {
         }
         // bloomBrightRT now holds the final blurred bloom.
 
-        // ── Pass 3: tone-map HDR -> default framebuffer ───────────────────────
-        backend.bindDefaultRenderTarget();
-        backend.setViewport(fbSize.x, fbSize.y);
-        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-
         tonemapMat.set("uExposure",       exposure);
         tonemapMat.set("uBloomIntensity", bloomIntensity);
 
-        fullscreenQuad(tonemapMat);
+        if (ssaoShow) {
+            // ── Debug: show raw SSAO buffer as grayscale ─────────────────────
+            backend.bindDefaultRenderTarget();
+            backend.setViewport(fbSize.x, fbSize.y);
+            fullscreenQuad(ssaoShowMat);
+        } else if (fxaaEnabled) {
+            // ── Pass 3: tone-map HDR -> LDR RT ───────────────────────────────
+            renderer.bindRenderTarget(ldrRT);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+            fullscreenQuad(tonemapMat);
+
+            // ── Pass 4: FXAA LDR RT -> default framebuffer ───────────────────
+            backend.bindDefaultRenderTarget();
+            backend.setViewport(fbSize.x, fbSize.y);
+            fxaaMat.set("uTexelSize", glm::vec2(1.0f / fbSize.x, 1.0f / fbSize.y));
+            fullscreenQuad(fxaaMat);
+        } else {
+            // ── Pass 3 (no FXAA): tone-map HDR directly -> default framebuffer
+            backend.bindDefaultRenderTarget();
+            backend.setViewport(fbSize.x, fbSize.y);
+            fullscreenQuad(tonemapMat);
+        }
 
         // ── ImGui ──────────────────────────────────────────────────────────────
         imgui.begin();
@@ -686,8 +743,14 @@ int main() {
 
             if (ImGui::CollapsingHeader("SSAO", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Checkbox   ("Enable##ssao",  &ssaoEnabled);
-                ImGui::SliderFloat("Radius##ssao",  &ssaoRadius, 0.1f, 1.0f);
-                ImGui::SliderFloat("Bias##ssao",    &ssaoBias,   0.005f, 0.1f, "%.3f");
+                ImGui::Checkbox   ("Visualize AO",  &ssaoShow);
+                ImGui::SliderFloat("Radius##ssao",  &ssaoRadius, 0.1f, 3.0f);
+                ImGui::SliderFloat("Bias##ssao",    &ssaoBias,   0.01f, 0.2f, "%.3f");
+            }
+
+            if (ImGui::CollapsingHeader("Anti-aliasing", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox("FXAA", &fxaaEnabled);
+                ImGui::TextDisabled("Look at diagonal edges (helmet, cube corners)");
             }
 
             if (ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen)) {
