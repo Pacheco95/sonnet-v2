@@ -96,24 +96,31 @@ int main() {
 
     sonnet::renderer::frontend::Renderer renderer{backend};
 
-    // ── Shadow map render target (depth texture, no colour) ───────────────────
-    constexpr std::uint32_t SHADOW_SIZE = 2048;
-    const auto shadowRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
-        .width  = SHADOW_SIZE,
-        .height = SHADOW_SIZE,
-        .colors = {},
-        .depth  = sonnet::api::render::TextureAttachmentDesc{
-            .format      = sonnet::api::render::TextureFormat::Depth24,
-            .samplerDesc = {
-                .minFilter    = sonnet::api::render::MinFilter::Linear,
-                .magFilter    = sonnet::api::render::MagFilter::Linear,
-                .wrapS        = sonnet::api::render::TextureWrap::ClampToEdge,
-                .wrapT        = sonnet::api::render::TextureWrap::ClampToEdge,
-                .depthCompare = true,
+    // ── Cascaded shadow map render targets (3 × Depth24, 2048²) ─────────────────
+    constexpr std::uint32_t SHADOW_SIZE  = 2048;
+    constexpr int           NUM_CASCADES = 3;
+
+    const sonnet::api::render::SamplerDesc csmSamplerDesc{
+        .minFilter    = sonnet::api::render::MinFilter::Linear,
+        .magFilter    = sonnet::api::render::MagFilter::Linear,
+        .wrapS        = sonnet::api::render::TextureWrap::ClampToEdge,
+        .wrapT        = sonnet::api::render::TextureWrap::ClampToEdge,
+        .depthCompare = true,
+    };
+    std::array<sonnet::core::RenderTargetHandle, NUM_CASCADES> csmRTHandles{};
+    std::array<sonnet::core::GPUTextureHandle,       NUM_CASCADES> csmDepthHandles{};
+    for (int i = 0; i < NUM_CASCADES; ++i) {
+        csmRTHandles[i] = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+            .width  = SHADOW_SIZE,
+            .height = SHADOW_SIZE,
+            .colors = {},
+            .depth  = sonnet::api::render::TextureAttachmentDesc{
+                .format      = sonnet::api::render::TextureFormat::Depth24,
+                .samplerDesc = csmSamplerDesc,
             },
-        },
-    });
-    const auto shadowDepthHandle = renderer.depthTextureHandle(shadowRTHandle);
+        });
+        csmDepthHandles[i] = renderer.depthTextureHandle(csmRTHandles[i]);
+    }
 
     // ── Point-light shadow cubemaps (4 × R32F, 512²) + shared depth RBO ─────
     constexpr int   MAX_SHADOW_LIGHTS = 4;
@@ -210,7 +217,6 @@ int main() {
     // ── Scene — loaded from JSON (shaders + materials + meshes + objects) ─────
     sonnet::world::Scene scene;
     sonnet::scene::SceneLoader sceneLoader;
-    sceneLoader.registerTexture("shadowDepth", shadowDepthHandle);
     const auto loaded = sceneLoader.load(
         DEMO_ASSETS_DIR "/scene.json",
         DEMO_ASSETS_DIR,
@@ -468,7 +474,8 @@ int main() {
     deferredMat.addTexture("gNormalMetallic",  gbufNormalMetallicTex);
     deferredMat.addTexture("gEmissiveAO",      gbufEmissiveAOTex);
     deferredMat.addTexture("gDepth",           gbufDepthTex);
-    deferredMat.addTexture("uShadowMap",       shadowDepthHandle);
+    for (int c = 0; c < NUM_CASCADES; ++c)
+        deferredMat.addTexture("uShadowMaps[" + std::to_string(c) + "]", csmDepthHandles[c]);
     deferredMat.addTexture("uIrradianceMap",   ibl.irradianceHandle);
     deferredMat.addTexture("uPrefilteredMap",  ibl.prefilteredHandle);
     deferredMat.addTexture("uBRDFLUT",         ibl.brdfLUTHandle);
@@ -575,32 +582,45 @@ int main() {
         cube.transform.setLocalRotation(
             glm::angleAxis(glm::radians(rotation * 0.5f), glm::vec3{1, 0, 0}));
 
-        // ── Light-space matrix (orthographic projection from the light) ────────
+        // ── Camera matrices (needed for CSM frustum extraction) ──────────────
+        const float aspect = fbSize.x > 0 && fbSize.y > 0
+            ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
+            : 16.0f / 9.0f;
+        const glm::mat4 viewMat    = cameraObj.camera->viewMatrix(cameraObj.transform);
+        const glm::mat4 projMat    = cameraObj.camera->projectionMatrix(aspect);
+        const glm::mat4 invProjMat = glm::inverse(projMat);
+        const glm::vec3 camPos     = cameraObj.transform.getWorldPosition();
+
+        // ── Pass 1: Cascaded shadow maps ──────────────────────────────────────
+        // Split view frustum [near, shadowFar] into NUM_CASCADES slices using
+        // a blend (lambda=0.75) of logarithmic and uniform distributions.
+        const float csmNear      = cameraObj.camera->near;
+        const float csmFar       = 50.0f; // shadow range (shorter than camera far)
+        constexpr float csmLambda = 0.75f;
+
+        // Cascade split depths in view space (positive, camera-space Z).
+        std::array<float, NUM_CASCADES> csmSplitDepths{};
+        for (int i = 0; i < NUM_CASCADES; ++i) {
+            const float p       = static_cast<float>(i + 1) / static_cast<float>(NUM_CASCADES);
+            const float logSplit = csmNear * std::pow(csmFar / csmNear, p);
+            const float uniSplit = csmNear + (csmFar - csmNear) * p;
+            csmSplitDepths[i] = csmLambda * logSplit + (1.0f - csmLambda) * uniSplit;
+        }
+
+        // Light-view matrix (shared across all cascades).
         const glm::vec3 lightDirNorm = glm::normalize(lightDir);
         const glm::vec3 lightUp = std::abs(lightDirNorm.y) > 0.99f
                                 ? glm::vec3{0.0f, 0.0f, 1.0f}
                                 : glm::vec3{0.0f, 1.0f, 0.0f};
-        const glm::mat4 lightView = glm::lookAt(lightDirNorm * 10.0f,
-                                                glm::vec3{0.0f},
-                                                lightUp);
-        const glm::mat4 lightProj = glm::ortho(-4.0f, 4.0f, -4.0f, 4.0f, 1.0f, 20.0f);
-        const glm::mat4 lightSpaceMat = lightProj * lightView;
+        const glm::mat4 lightView = glm::lookAt(-lightDirNorm, glm::vec3{0.0f}, lightUp);
 
-        // ── Pass 1: shadow map ─────────────────────────────────────────────────
-        renderer.bindRenderTarget(shadowRTHandle);
-        backend.setViewport(SHADOW_SIZE, SHADOW_SIZE);
-        backend.clear({ .depth = 1.0f });
-
-        const glm::vec3 shadowOrigin{0.0f};
-        sonnet::api::render::FrameContext shadowCtx{
-            .viewMatrix       = lightView,
-            .projectionMatrix = lightProj,
-            .viewPosition     = shadowOrigin,
-            .viewportWidth    = SHADOW_SIZE,
-            .viewportHeight   = SHADOW_SIZE,
-            .deltaTime        = 0.0f,
+        // NDC corners of a unit cube (clip-space frustum corners).
+        const glm::vec4 ndcCorners[8] = {
+            {-1,-1,-1, 1}, { 1,-1,-1, 1}, {-1, 1,-1, 1}, { 1, 1,-1, 1},
+            {-1,-1, 1, 1}, { 1,-1, 1, 1}, {-1, 1, 1, 1}, { 1, 1, 1, 1},
         };
-        // Build shadow queue: same geometry, shadow-only material.
+
+        // Build shadow geometry queue (same for all cascades).
         std::vector<sonnet::api::render::RenderItem> shadowQueue;
         for (const auto &obj : scene.objects()) {
             if (!obj->render) continue;
@@ -610,18 +630,58 @@ int main() {
                 .modelMatrix = obj->transform.getModelMatrix(),
             });
         }
-        renderer.beginFrame();
-        renderer.render(shadowCtx, shadowQueue);
-        renderer.endFrame();
 
-        // ── Camera matrices (shared across pre-pass, SSAO, and lit pass) ──────
-        const float aspect = fbSize.x > 0 && fbSize.y > 0
-            ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
-            : 16.0f / 9.0f;
-        const glm::mat4 viewMat    = cameraObj.camera->viewMatrix(cameraObj.transform);
-        const glm::mat4 projMat    = cameraObj.camera->projectionMatrix(aspect);
-        const glm::mat4 invProjMat = glm::inverse(projMat);
-        const glm::vec3 camPos     = cameraObj.transform.getWorldPosition();
+        std::array<glm::mat4, NUM_CASCADES> csmLightSpaceMats{};
+        float prevSplitDepth = csmNear;
+        for (int c = 0; c < NUM_CASCADES; ++c) {
+            const float splitDepth = csmSplitDepths[c];
+
+            // Build a projection for this cascade slice [prevSplitDepth, splitDepth].
+            const glm::mat4 cascadeProj = glm::perspective(
+                glm::radians(cameraObj.camera->fov), aspect,
+                prevSplitDepth, splitDepth);
+            const glm::mat4 invCamVP = glm::inverse(cascadeProj * viewMat);
+
+            // Transform NDC corners to world space, then to light space.
+            float minX =  1e9f, maxX = -1e9f;
+            float minY =  1e9f, maxY = -1e9f;
+            for (const auto &nc : ndcCorners) {
+                glm::vec4 world = invCamVP * nc;
+                world /= world.w;
+                glm::vec4 ls = lightView * world;
+                minX = std::min(minX, ls.x); maxX = std::max(maxX, ls.x);
+                minY = std::min(minY, ls.y); maxY = std::max(maxY, ls.y);
+            }
+            // Fixed generous z range to capture shadow casters outside the frustum.
+            const glm::mat4 cascadeOrtho =
+                glm::ortho(minX, maxX, minY, maxY, -100.0f, 100.0f);
+            csmLightSpaceMats[c] = cascadeOrtho * lightView;
+
+            renderer.bindRenderTarget(csmRTHandles[c]);
+            backend.setViewport(SHADOW_SIZE, SHADOW_SIZE);
+            glDepthMask(GL_TRUE);
+            backend.clear({ .depth = 1.0f });
+
+            sonnet::api::render::FrameContext shadowCtx{
+                .viewMatrix       = lightView,
+                .projectionMatrix = cascadeOrtho,
+                .viewPosition     = glm::vec3{0.0f},
+                .viewportWidth    = SHADOW_SIZE,
+                .viewportHeight   = SHADOW_SIZE,
+                .deltaTime        = 0.0f,
+            };
+            renderer.beginFrame();
+            renderer.render(shadowCtx, shadowQueue);
+            renderer.endFrame();
+
+            prevSplitDepth = splitDepth;
+        }
+
+        // Upload cascade matrices and split depths to the deferred lighting shader.
+        for (int c = 0; c < NUM_CASCADES; ++c) {
+            deferredMat.set("uCSMLightSpaceMats[" + std::to_string(c) + "]", csmLightSpaceMats[c]);
+            deferredMat.set("uCSMSplitDepths["   + std::to_string(c) + "]", csmSplitDepths[c]);
+        }
 
         // Post-process helpers (identity view/proj + fullscreen quad renderer).
         const glm::mat4 identity{1.0f};
@@ -683,7 +743,6 @@ int main() {
                 .intensity = lightIntensity,
             },
             .pointLights      = ctxPointLights,
-            .lightSpaceMatrix = lightSpaceMat,
         };
 
         // ── Pass 1.2: point-light shadow cubemaps ─────────────────────────────
@@ -917,6 +976,10 @@ int main() {
                 ImGui::SliderFloat("Point bias", &pointShadowBias,  0.001f,  0.05f,  "%.4f");
                 ImGui::TextDisabled("Point shadow lights: %d / %d",
                                     shadowLightCount, MAX_SHADOW_LIGHTS);
+                ImGui::Separator();
+                ImGui::TextDisabled("CSM cascade splits (view-space):");
+                for (int c = 0; c < NUM_CASCADES; ++c)
+                    ImGui::TextDisabled("  Cascade %d: %.2f m", c, csmSplitDepths[c]);
             }
 
             if (ImGui::CollapsingHeader("Tone-mapping", ImGuiTreeNodeFlags_DefaultOpen)) {

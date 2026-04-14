@@ -9,7 +9,11 @@ uniform sampler2D gEmissiveAO;      // .rgb = emissive, .a = ORM ambient-occlusi
 uniform sampler2D gDepth;           // hardware depth [0,1]
 
 // ── Lighting ──────────────────────────────────────────────────────────────────
-uniform sampler2DShadow uShadowMap;
+// ── Cascaded shadow maps (directional light) ──────────────────────────────────
+#define NUM_CASCADES 3
+uniform sampler2DShadow uShadowMaps[NUM_CASCADES];
+uniform mat4            uCSMLightSpaceMats[NUM_CASCADES];
+uniform float           uCSMSplitDepths[NUM_CASCADES]; // view-space far depths (positive)
 uniform float           uShadowBias;
 
 // ── Point-light shadow cubemaps ───────────────────────────────────────────────
@@ -26,8 +30,8 @@ uniform float           uMaxPrefilteredLOD;
 uniform sampler2D       uSSAO;      // blurred screen-space AO
 
 // ── Matrices and camera ───────────────────────────────────────────────────────
-uniform mat4  uInvViewProj;      // inverse(proj * view) — reconstruct world pos from depth
-uniform mat4  uLightSpaceMatrix; // for PCF shadow sampling
+uniform mat4  uInvViewProj;  // inverse(proj * view) — reconstruct world pos from depth
+uniform mat4  uView;         // camera view — for cascade depth selection
 uniform vec3  uViewPosition;
 
 // ── Lights ────────────────────────────────────────────────────────────────────
@@ -92,9 +96,19 @@ vec3 worldPosFromDepth(vec2 uv) {
     return world.xyz / world.w;
 }
 
-// ── 3×3 PCF shadow (hardware sampler2DShadow) ─────────────────────────────────
+// ── Cascaded PCF shadow (3×3 kernel, hardware sampler2DShadow) ───────────────
 float shadowFactor(vec3 worldPos, vec3 N) {
-    vec4 lightSpacePos = uLightSpaceMatrix * vec4(worldPos, 1.0);
+    // View-space depth selects which cascade to sample.
+    float viewDepth = -(uView * vec4(worldPos, 1.0)).z;
+    int cascade = NUM_CASCADES - 1;
+    for (int i = 0; i < NUM_CASCADES - 1; ++i) {
+        if (viewDepth < uCSMSplitDepths[i]) {
+            cascade = i;
+            break;
+        }
+    }
+
+    vec4 lightSpacePos = uCSMLightSpaceMats[cascade] * vec4(worldPos, 1.0);
     vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
     proj = proj * 0.5 + 0.5;
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 ||
@@ -102,11 +116,12 @@ float shadowFactor(vec3 worldPos, vec3 N) {
         return 1.0;
     float bias = max(uShadowBias * (1.0 - dot(N, normalize(uDirLight.direction))),
                      uShadowBias * 0.1);
-    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
+    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMaps[cascade], 0));
     float shadow = 0.0;
     for (int x = -1; x <= 1; ++x)
         for (int y = -1; y <= 1; ++y)
-            shadow += texture(uShadowMap, vec3(proj.xy + vec2(x, y) * texelSize, proj.z - bias));
+            shadow += texture(uShadowMaps[cascade],
+                              vec3(proj.xy + vec2(x, y) * texelSize, proj.z - bias));
     return shadow / 9.0;
 }
 
