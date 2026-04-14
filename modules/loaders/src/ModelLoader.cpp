@@ -14,6 +14,7 @@
 #include <cstring>
 #include <functional>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace sonnet::loaders {
 
@@ -230,30 +231,66 @@ LoadedModel ModelLoader::loadAll(const std::filesystem::path &path) {
 
     const auto modelDir = path.parent_path();
 
-    // Traverse the node tree to collect meshes in hierarchy order, naming each
-    // LoadedMesh by its *node* name (not mesh name) so animation channel names
-    // (which reference node names) align with the child GameObjects in SceneLoader.
+    // Build the full node hierarchy so SceneLoader can create one GameObject per
+    // node, including empty controller/pivot nodes targeted by animation channels.
     LoadedModel result;
     result.meshes.reserve(scene->mNumMeshes);
 
-    std::function<void(const aiNode *)> visitNode = [&](const aiNode *node) {
-        const std::string nodeName{node->mName.C_Str()};
-        for (unsigned mi = 0; mi < node->mNumMeshes; ++mi) {
-            const aiMesh *mesh = scene->mMeshes[node->mMeshes[mi]];
-            auto cpuMesh = convertMesh(mesh);
-            MeshMaterial mat;
-            if (mesh->mMaterialIndex < scene->mNumMaterials)
-                mat = extractMaterial(scene, scene->mMaterials[mesh->mMaterialIndex], modelDir);
-            // Name by node; append index suffix when a node owns multiple meshes.
-            const std::string name = (node->mNumMeshes == 1)
-                ? nodeName
-                : nodeName + "_" + std::to_string(mi);
-            result.meshes.push_back(LoadedMesh{std::move(cpuMesh), std::move(mat), name});
+    // Map from Assimp global mesh index → LoadedModel::meshes index (avoids
+    // loading the same mesh twice if multiple nodes share it).
+    std::unordered_map<unsigned, int> aiMeshToLoaded;
+
+    std::function<int(const aiNode *)> buildNode = [&](const aiNode *node) -> int {
+        // Reserve this node's index before any recursive call that may grow the vector.
+        const int nodeIdx = static_cast<int>(result.nodes.size());
+        result.nodes.emplace_back();
+
+        {
+            LoadedNode &ln = result.nodes[nodeIdx];
+            ln.name = node->mName.C_Str();
+
+            // Decompose the node's local transform.
+            aiVector3D pos, scale;
+            aiQuaternion rot;
+            node->mTransformation.Decompose(scale, rot, pos);
+            ln.localPosition = {pos.x, pos.y, pos.z};
+            // aiQuaternion is (w,x,y,z); glm::quat constructor is (w,x,y,z).
+            ln.localRotation = glm::quat{rot.w, rot.x, rot.y, rot.z};
+            ln.localScale    = {scale.x, scale.y, scale.z};
+
+            // Load meshes referenced by this node.
+            for (unsigned mi = 0; mi < node->mNumMeshes; ++mi) {
+                const unsigned aiIdx = node->mMeshes[mi];
+                auto it = aiMeshToLoaded.find(aiIdx);
+                if (it == aiMeshToLoaded.end()) {
+                    const aiMesh *mesh = scene->mMeshes[aiIdx];
+                    auto cpuMesh = convertMesh(mesh);
+                    MeshMaterial mat;
+                    if (mesh->mMaterialIndex < scene->mNumMaterials)
+                        mat = extractMaterial(scene,
+                                              scene->mMaterials[mesh->mMaterialIndex],
+                                              modelDir);
+                    const int loadedIdx = static_cast<int>(result.meshes.size());
+                    result.meshes.push_back(LoadedMesh{
+                        std::move(cpuMesh), std::move(mat),
+                        std::string{node->mName.C_Str()},
+                    });
+                    aiMeshToLoaded[aiIdx] = loadedIdx;
+                    it = aiMeshToLoaded.find(aiIdx);
+                }
+                result.nodes[nodeIdx].meshIndices.push_back(it->second);
+            }
         }
-        for (unsigned ci = 0; ci < node->mNumChildren; ++ci)
-            visitNode(node->mChildren[ci]);
+
+        // Recurse into children after setting up this node.  Recursive calls may
+        // reallocate result.nodes, so always access by index, never by pointer.
+        for (unsigned ci = 0; ci < node->mNumChildren; ++ci) {
+            const int childIdx = buildNode(node->mChildren[ci]);
+            result.nodes[nodeIdx].children.push_back(childIdx);
+        }
+        return nodeIdx;
     };
-    visitNode(scene->mRootNode);
+    result.rootNode = buildNode(scene->mRootNode);
 
     // ── Animation clips ───────────────────────────────────────────────────────
     for (unsigned a = 0; a < scene->mNumAnimations; ++a) {

@@ -13,6 +13,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <fstream>
 #include <stdexcept>
 
@@ -273,79 +274,95 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                     throw std::runtime_error("SceneLoader: model material '" +
                                              entry.materialName + "' not found");
 
-                for (std::size_t i = 0; i < entry.loadedModel.meshes.size(); ++i) {
-                    const auto &lm = entry.loadedModel.meshes[i];
-                    const std::string childName =
-                        name + "/" + (lm.name.empty() ? std::to_string(i) : lm.name);
-
-                    auto &child = scene.createObject(childName, &obj);
-                    result.objects[childName] = &child;
-
-                    auto gpuMesh = renderer->createMesh(lm.mesh);
-                    MaterialInstance childMat{matTmplIt->second};
-
-                    // Helper: create a GPU texture from a MeshTexture.
-                    auto uploadTex = [&](const loaders::MeshTexture &tex) -> core::GPUTextureHandle {
-                        const ColorSpace cs = tex.srgb ? ColorSpace::sRGB : ColorSpace::Linear;
-                        if (tex.embedded && tex.cpuData) {
-                            const auto &cd = *tex.cpuData;
-                            const auto fmt = cd.channels == 4 ? TextureFormat::RGBA8 : TextureFormat::RGB8;
-                            return renderer->createTexture(
-                                TextureDesc{.size = {cd.width, cd.height},
-                                            .format = fmt, .colorSpace = cs},
-                                {}, cd);
-                        }
-                        auto cpuTex = loaders::TextureLoader::load(tex.path);
-                        const auto fmt = cpuTex.channels == 4 ? TextureFormat::RGBA8 : TextureFormat::RGB8;
+                // Helper: upload a MeshTexture to the GPU.
+                auto uploadTex = [&](const loaders::MeshTexture &tex) -> core::GPUTextureHandle {
+                    const ColorSpace cs = tex.srgb ? ColorSpace::sRGB : ColorSpace::Linear;
+                    if (tex.embedded && tex.cpuData) {
+                        const auto &cd = *tex.cpuData;
+                        const auto fmt = cd.channels == 4 ? TextureFormat::RGBA8 : TextureFormat::RGB8;
                         return renderer->createTexture(
-                            TextureDesc{.size = {cpuTex.width, cpuTex.height},
+                            TextureDesc{.size = {cd.width, cd.height},
                                         .format = fmt, .colorSpace = cs},
-                            {}, cpuTex);
-                    };
-
-                    if (lm.material.albedo.valid())
-                        childMat.addTexture("uAlbedo",    uploadTex(lm.material.albedo));
-                    if (lm.material.normal.valid())
-                        childMat.addTexture("uNormalMap", uploadTex(lm.material.normal));
-                    if (lm.material.orm.valid())
-                        childMat.addTexture("uORM",       uploadTex(lm.material.orm));
-                    if (lm.material.emissive.valid()) {
-                        childMat.addTexture("uEmissive",    uploadTex(lm.material.emissive));
-                        childMat.set("uEmissiveFactor", lm.material.emissiveFactor);
+                            {}, cd);
                     }
-                    if (lm.material.alphaMask)
-                        childMat.set("uAlphaCutoff", lm.material.alphaCutoff);
+                    auto cpuTex = loaders::TextureLoader::load(tex.path);
+                    const auto fmt = cpuTex.channels == 4 ? TextureFormat::RGBA8 : TextureFormat::RGB8;
+                    return renderer->createTexture(
+                        TextureDesc{.size = {cpuTex.width, cpuTex.height},
+                                    .format = fmt, .colorSpace = cs},
+                        {}, cpuTex);
+                };
 
-                    // Apply per-instance render overrides from scene JSON.
-                    if (rc.contains("textures")) {
-                        for (const auto &[uniform, texName] : rc["textures"].items()) {
-                            auto texIt = textures.find(texName.get<std::string>());
-                            if (texIt != textures.end())
-                                childMat.addTexture(uniform, texIt->second);
+                // Recursively create one GameObject per node in the loaded hierarchy.
+                // Empty (mesh-less) nodes are created so animation channels that target
+                // parent/controller nodes propagate to their mesh children via the
+                // Transform hierarchy.
+                std::function<void(int, world::GameObject *)> createNodes =
+                    [&](int nodeIdx, world::GameObject *parent) {
+                        const auto &node = entry.loadedModel.nodes[nodeIdx];
+                        const std::string childName = name + "/" + node.name;
+
+                        auto &child = scene.createObject(childName, parent);
+                        result.objects[childName] = &child;
+
+                        // Apply the local transform baked into the glTF node.
+                        child.transform.setLocalPosition(node.localPosition);
+                        child.transform.setLocalRotation(node.localRotation);
+                        child.transform.setLocalScale(node.localScale);
+
+                        // Attach mesh (if any).  When a node owns multiple meshes,
+                        // only the first is attached directly; extras become sub-children.
+                        if (!node.meshIndices.empty()) {
+                            const auto &lm = entry.loadedModel.meshes[node.meshIndices[0]];
+                            auto gpuMesh = renderer->createMesh(lm.mesh);
+                            MaterialInstance childMat{matTmplIt->second};
+
+                            if (lm.material.albedo.valid())
+                                childMat.addTexture("uAlbedo",    uploadTex(lm.material.albedo));
+                            if (lm.material.normal.valid())
+                                childMat.addTexture("uNormalMap", uploadTex(lm.material.normal));
+                            else if (auto it = textures.find("flatNormal"); it != textures.end())
+                                childMat.addTexture("uNormalMap", it->second);
+                            if (lm.material.orm.valid())
+                                childMat.addTexture("uORM",       uploadTex(lm.material.orm));
+                            if (lm.material.emissive.valid()) {
+                                childMat.addTexture("uEmissive",    uploadTex(lm.material.emissive));
+                                childMat.set("uEmissiveFactor", lm.material.emissiveFactor);
+                            }
+                            if (lm.material.alphaMask)
+                                childMat.set("uAlphaCutoff", lm.material.alphaCutoff);
+
+                            if (rc.contains("textures")) {
+                                for (const auto &[uniform, texName] : rc["textures"].items()) {
+                                    auto texIt = textures.find(texName.get<std::string>());
+                                    if (texIt != textures.end())
+                                        childMat.addTexture(uniform, texIt->second);
+                                }
+                            }
+                            child.render = world::RenderComponent{
+                                .mesh     = gpuMesh,
+                                .material = std::move(childMat),
+                            };
                         }
-                    }
 
-                    child.render = world::RenderComponent{
-                        .mesh     = gpuMesh,
-                        .material = std::move(childMat),
+                        for (int ci : node.children)
+                            createNodes(ci, &child);
                     };
-                }
+                createNodes(entry.loadedModel.rootNode, &obj);
 
                 // ── Animation player ───────────────────────────────────────────
-                // If the model has embedded animation clips, attach an AnimationPlayer
-                // to the parent object and map child node names to their transforms.
+                // All nodes now have corresponding GameObjects; map every child by
+                // its short node name so animation channels can drive them directly.
                 if (!entry.loadedModel.animations.empty()) {
                     world::AnimationPlayer player;
                     player.clips = entry.loadedModel.animations;
-                    // Map the parent itself (root node may be animated directly).
                     player.addTarget(name, &obj.transform);
-                    // Map each child by its short node name (after "parentName/").
                     const std::string prefix = name + "/";
                     for (auto &[childName, childObj] : result.objects) {
                         if (childName.size() > prefix.size() &&
                             childName.substr(0, prefix.size()) == prefix) {
-                            const std::string nodeName = childName.substr(prefix.size());
-                            player.addTarget(nodeName, &childObj->transform);
+                            player.addTarget(childName.substr(prefix.size()),
+                                             &childObj->transform);
                         }
                     }
                     obj.animationPlayer = std::move(player);

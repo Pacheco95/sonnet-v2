@@ -28,8 +28,8 @@
             "floor":   { "primitive": "box",    "size": [6.0, 0.1, 6.0] },
             "sphere":  { "primitive": "sphere", "segmentsX": 24, "segmentsY": 12 },
             "helmet":  { "model": "models/DamagedHelmet.glb", "material": "lit" },
-            "fox":          { "model": "models/Fox.glb",           "material": "lit" },
-            "animatedCube": { "model": "models/AnimatedCube.glb",  "material": "lit" }
+            "fox":         { "model": "models/Fox.glb",         "material": "lit" },
+            "busterDrone": { "model": "models/buster_drone.glb", "material": "lit" }
         },
         "textures": {
             "metalAlbedo": "metal034_albedo.jpg",
@@ -95,10 +95,10 @@
             "render":   { "mesh": "fox" }
         },
         {
-            "name":     "AnimCubeObj",
-            "position": [0.0, 0.5, 2.0],
+            "name":     "BusterDrone",
+            "position": [0.0, 0.3, 1.5],
             "scale":    [0.3, 0.3, 0.3],
-            "render":   { "mesh": "animatedCube" }
+            "render":   { "mesh": "busterDrone" }
         }
     ]
 }

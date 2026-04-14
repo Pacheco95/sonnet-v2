@@ -64,9 +64,24 @@ struct AnimationClip {
     std::vector<AnimationChannel> channels;
 };
 
-// Return type of loadAll(): meshes plus any embedded animation clips.
+// A node in the loaded scene hierarchy.  Mirrors the Assimp aiNode tree so that
+// SceneLoader can create one GameObject per node and wire up parent→child
+// Transform links.  Animation channels target nodes by name, so empty (mesh-less)
+// controller nodes are preserved.
+struct LoadedNode {
+    std::string       name;
+    std::vector<int>  meshIndices; // indices into LoadedModel::meshes
+    std::vector<int>  children;    // indices into LoadedModel::nodes
+    glm::vec3         localPosition{0.0f};
+    glm::quat         localRotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3         localScale{1.0f};
+};
+
+// Return type of loadAll(): full scene hierarchy + meshes + animation clips.
 struct LoadedModel {
     std::vector<LoadedMesh>    meshes;
+    std::vector<LoadedNode>    nodes;      // full node tree (includes empty nodes)
+    int                        rootNode = 0;
     std::vector<AnimationClip> animations;
 };
 
