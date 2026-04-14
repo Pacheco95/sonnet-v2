@@ -455,8 +455,18 @@ int main() {
     float cubeRoughness     = 1.0f;
     float floorMetallic     = 1.0f;
     float floorRoughness    = 1.0f;
-    glm::vec3 lampColor     = {1.0f, 0.75f, 0.3f};
-    float     lampStrength  = 6.0f;
+
+    // ── Editable point lights ─────────────────────────────────────────────────
+    // Light 0 is the lamp sphere — position tracks lamp.transform, color/strength
+    // also drive the emissive material.  Lights 1-7 are freely placed.
+    struct PointLightEdit {
+        glm::vec3 color{1.0f, 1.0f, 1.0f};
+        float     intensity{3.0f};
+        glm::vec3 position{0.0f}; // ignored for light 0 (uses lamp transform)
+        bool      enabled{true};
+    };
+    std::vector<PointLightEdit> pointLights;
+    pointLights.push_back({ .color = {1.0f, 0.75f, 0.3f}, .intensity = 6.0f });
 
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -570,10 +580,26 @@ int main() {
         cubeMat.set("uRoughness",   cubeRoughness);
         floorMat.set("uMetallic",   floorMetallic);
         floorMat.set("uRoughness",  floorRoughness);
-        lampMat.set("uEmissiveColor",    lampColor);
-        lampMat.set("uEmissiveStrength", lampStrength);
+        // Light 0 drives the lamp sphere's emissive visual.
+        if (!pointLights.empty()) {
+            lampMat.set("uEmissiveColor",    pointLights[0].color);
+            lampMat.set("uEmissiveStrength", pointLights[0].intensity);
+        }
 
+        // Build the PointLight array for the deferred lighting pass.
         const glm::vec3 lampPos = lamp.transform.getWorldPosition();
+        std::vector<sonnet::api::render::PointLight> ctxPointLights;
+        for (int i = 0; i < static_cast<int>(pointLights.size()); ++i) {
+            if (!pointLights[i].enabled) continue;
+            const glm::vec3 pos = (i == 0) ? lampPos : pointLights[i].position;
+            ctxPointLights.push_back({
+                .position  = pos,
+                .color     = pointLights[i].color,
+                .intensity = pointLights[i].intensity,
+            });
+            if (ctxPointLights.size() >= 8) break; // clamp to shader MAX_POINT_LIGHTS
+        }
+
         sonnet::api::render::FrameContext ctx{
             .viewMatrix       = viewMat,
             .projectionMatrix = projMat,
@@ -586,13 +612,7 @@ int main() {
                 .color     = lightColor,
                 .intensity = lightIntensity,
             },
-            .pointLights = {
-                sonnet::api::render::PointLight{
-                    .position  = lampPos,
-                    .color     = lampColor,
-                    .intensity = lampStrength,
-                },
-            },
+            .pointLights      = ctxPointLights,
             .lightSpaceMatrix = lightSpaceMat,
         };
 
@@ -742,9 +762,48 @@ int main() {
                 ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f);
             }
 
-            if (ImGui::CollapsingHeader("Lamp", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::ColorEdit3("Color##lamp",     &lampColor.x);
-                ImGui::SliderFloat("Strength##lamp", &lampStrength, 0.0f, 20.0f);
+            if (ImGui::CollapsingHeader("Point Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+                int removeIdx = -1;
+                for (int i = 0; i < static_cast<int>(pointLights.size()); ++i) {
+                    ImGui::PushID(i);
+                    auto &pl = pointLights[i];
+
+                    // Collapsing header per light.
+                    const std::string label = (i == 0)
+                        ? "Lamp (light 0)"
+                        : "Light " + std::to_string(i);
+                    bool open = ImGui::CollapsingHeader(label.c_str(),
+                                    ImGuiTreeNodeFlags_DefaultOpen);
+                    if (open) {
+                        ImGui::Checkbox("Enabled", &pl.enabled);
+                        ImGui::ColorEdit3("Color",        &pl.color.x);
+                        ImGui::SliderFloat("Intensity", &pl.intensity, 0.0f, 20.0f);
+                        if (i == 0) {
+                            // Lamp sphere position: read-only display.
+                            const glm::vec3 p = lamp.transform.getWorldPosition();
+                            ImGui::TextDisabled("Position  %.2f  %.2f  %.2f", p.x, p.y, p.z);
+                        } else {
+                            ImGui::DragFloat3("Position", &pl.position.x, 0.05f);
+                            if (ImGui::Button("Remove")) removeIdx = i;
+                        }
+                    }
+                    ImGui::PopID();
+                }
+                if (removeIdx >= 0)
+                    pointLights.erase(pointLights.begin() + removeIdx);
+
+                if (static_cast<int>(pointLights.size()) < 8) {
+                    if (ImGui::Button("+ Add Light")) {
+                        pointLights.push_back({
+                            .color    = {1.0f, 1.0f, 1.0f},
+                            .intensity = 3.0f,
+                            .position  = camPos, // spawn at camera position
+                            .enabled   = true,
+                        });
+                    }
+                } else {
+                    ImGui::TextDisabled("Maximum 8 lights reached.");
+                }
             }
 
             if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
