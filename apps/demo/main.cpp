@@ -1421,6 +1421,12 @@ int main() {
                 std::array<std::uint8_t, 4> pixel{};
                 glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
 
+                // Restore the default framebuffer immediately — the picking pass
+                // leaves pickingRT bound, which would cause imgui.end() to render
+                // ImGui into it instead of the screen, producing a one-frame blink.
+                backend.bindDefaultRenderTarget();
+                backend.setViewport(fbSize.x, fbSize.y);
+
                 const int hitId = int(pixel[0])
                                 | (int(pixel[1]) << 8)
                                 | (int(pixel[2]) << 16);
