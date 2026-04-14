@@ -184,6 +184,10 @@ int main() {
     auto &cubeMat   = cube.render->material;
     auto &floorMat  = floor.render->material;
     auto &lampMat   = lamp.render->material;
+    // Cache the lamp's sphere mesh handle + emissive material template so we can
+    // render small indicator spheres for lights 1-7 without touching the scene graph.
+    const auto sphereMeshHandle      = lamp.render->mesh;
+    const auto emissiveMatTemplate   = lamp.render->material.templateHandle();
 
     // ── HDR render target ─────────────────────────────────────────────────────
     const auto fbSize0    = window.getFrameBufferSize();
@@ -466,7 +470,17 @@ int main() {
         bool      enabled{true};
     };
     std::vector<PointLightEdit> pointLights;
+    // Light 0 — lamp sphere (position auto-synced to lamp transform)
     pointLights.push_back({ .color = {1.0f, 0.75f, 0.3f}, .intensity = 6.0f });
+    // Light 1 — cool blue near the helmet
+    pointLights.push_back({ .color = {0.3f, 0.5f, 1.0f}, .intensity = 4.0f,
+                             .position = {-2.5f, 1.2f, 1.5f} });
+    // Light 2 — warm red on the right, behind the cube arm
+    pointLights.push_back({ .color = {1.0f, 0.2f, 0.1f}, .intensity = 4.0f,
+                             .position = { 2.5f, 0.8f, 1.0f} });
+    // Light 3 — teal below and behind, grazes the floor
+    pointLights.push_back({ .color = {0.1f, 0.9f, 0.7f}, .intensity = 3.0f,
+                             .position = { 0.0f, 0.1f, -2.0f} });
 
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -631,6 +645,23 @@ int main() {
         {
             std::vector<sonnet::api::render::RenderItem> gbufQueue;
             scene.buildRenderQueue(gbufQueue);
+
+            // Add small emissive indicator spheres for lights 1+ (light 0 is the lamp sphere).
+            for (int i = 1; i < static_cast<int>(pointLights.size()); ++i) {
+                if (!pointLights[i].enabled) continue;
+                sonnet::api::render::MaterialInstance indMat{emissiveMatTemplate};
+                indMat.set("uEmissiveColor",    pointLights[i].color);
+                indMat.set("uEmissiveStrength", pointLights[i].intensity);
+                const glm::mat4 model =
+                    glm::translate(glm::mat4{1.0f}, pointLights[i].position) *
+                    glm::scale(glm::mat4{1.0f}, glm::vec3{0.08f});
+                gbufQueue.push_back({
+                    .mesh        = sphereMeshHandle,
+                    .material    = indMat,
+                    .modelMatrix = model,
+                });
+            }
+
             renderer.beginFrame();
             renderer.render(ctx, gbufQueue);
             renderer.endFrame();
