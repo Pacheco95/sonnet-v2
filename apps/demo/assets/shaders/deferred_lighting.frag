@@ -11,6 +11,14 @@ uniform sampler2D gDepth;           // hardware depth [0,1]
 // ── Lighting ──────────────────────────────────────────────────────────────────
 uniform sampler2DShadow uShadowMap;
 uniform float           uShadowBias;
+
+// ── Point-light shadow cubemaps ───────────────────────────────────────────────
+#define MAX_SHADOW_LIGHTS 4
+uniform samplerCube uPointShadowMaps[MAX_SHADOW_LIGHTS];
+uniform float       uPointShadowFarPlane;
+uniform float       uPointShadowBias;
+uniform int         uPointShadowCount;
+
 uniform samplerCube     uIrradianceMap;
 uniform samplerCube     uPrefilteredMap;
 uniform sampler2D       uBRDFLUT;
@@ -43,6 +51,15 @@ uniform PointLight uPointLights[MAX_POINT_LIGHTS];
 uniform int        uPointLightCount;
 
 const float PI = 3.14159265359;
+
+// 20 fixed offsets for point-shadow PCF (axis-aligned + diagonal directions).
+const vec3 shadowOffsets[20] = vec3[](
+    vec3( 1, 1, 1), vec3( 1,-1, 1), vec3(-1,-1, 1), vec3(-1, 1, 1),
+    vec3( 1, 1,-1), vec3( 1,-1,-1), vec3(-1,-1,-1), vec3(-1, 1,-1),
+    vec3( 1, 1, 0), vec3( 1,-1, 0), vec3(-1,-1, 0), vec3(-1, 1, 0),
+    vec3( 1, 0, 1), vec3(-1, 0, 1), vec3( 1, 0,-1), vec3(-1, 0,-1),
+    vec3( 0, 1, 1), vec3( 0,-1, 1), vec3( 0,-1,-1), vec3( 0, 1,-1)
+);
 
 // ── GGX Cook-Torrance BRDF helpers ───────────────────────────────────────────
 float D_GGX(float NdotH, float roughness) {
@@ -150,7 +167,24 @@ void main() {
         vec3 kd_p    = (vec3(1.0) - Fp) * (1.0 - metallic);
         vec3 diff_p  = kd_p * albedo / PI;
         vec3 rad_p   = uPointLights[i].color * uPointLights[i].intensity * atten;
-        Lo += (diff_p + spec_p) * rad_p * NdotLp;
+
+        // ── Point-light shadow (PCF over 20 cubemap samples) ─────────────────
+        float ptShadow = 1.0;
+        if (i < uPointShadowCount) {
+            vec3  fragToLight   = worldPos - uPointLights[i].position;
+            float currentDist   = length(fragToLight) / uPointShadowFarPlane;
+            float diskRadius    = (1.0 + currentDist) / 25.0;
+            float occluded      = 0.0;
+            for (int j = 0; j < 20; ++j) {
+                float closestDist = texture(uPointShadowMaps[i],
+                                           fragToLight + shadowOffsets[j] * diskRadius).r;
+                if (currentDist - uPointShadowBias > closestDist)
+                    occluded += 1.0;
+            }
+            ptShadow = 1.0 - occluded / 20.0;
+        }
+
+        Lo += (diff_p + spec_p) * rad_p * NdotLp * ptShadow;
     }
 
     // ── IBL ambient (split-sum) ───────────────────────────────────────────────

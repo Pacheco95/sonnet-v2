@@ -115,6 +115,47 @@ int main() {
     });
     const auto shadowDepthHandle = renderer.depthTextureHandle(shadowRTHandle);
 
+    // ── Point-light shadow cubemaps (4 × R32F, 512²) + shared depth RBO ─────
+    constexpr int   MAX_SHADOW_LIGHTS = 4;
+    constexpr int   POINT_SHADOW_SIZE = 512;
+    constexpr float POINT_SHADOW_FAR  = 25.0f;
+
+    std::array<GLuint, MAX_SHADOW_LIGHTS> pointShadowCubeTex{};
+    glGenTextures(MAX_SHADOW_LIGHTS, pointShadowCubeTex.data());
+    for (int i = 0; i < MAX_SHADOW_LIGHTS; ++i) {
+        glBindTexture(GL_TEXTURE_CUBE_MAP, pointShadowCubeTex[i]);
+        for (int f = 0; f < 6; ++f)
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0,
+                         GL_R32F, POINT_SHADOW_SIZE, POINT_SHADOW_SIZE, 0,
+                         GL_RED, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+    GLuint pointShadowFBO = 0, pointShadowDepthRBO = 0;
+    glGenFramebuffers(1, &pointShadowFBO);
+    glGenRenderbuffers(1, &pointShadowDepthRBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, pointShadowDepthRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24,
+                          POINT_SHADOW_SIZE, POINT_SHADOW_SIZE);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+    // Attach depth RBO to the shadow FBO once; colour attachment is swapped per face.
+    glBindFramebuffer(GL_FRAMEBUFFER, pointShadowFBO);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                              GL_RENDERBUFFER, pointShadowDepthRBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // Register cubemaps with the engine renderer for use in materials.
+    std::array<sonnet::core::GPUTextureHandle, MAX_SHADOW_LIGHTS> pointShadowHandles{};
+    for (int i = 0; i < MAX_SHADOW_LIGHTS; ++i)
+        pointShadowHandles[i] = renderer.registerRawTexture(
+            std::make_unique<RawGLCubeMap>(pointShadowCubeTex[i]));
+
     // ── Shadow-pass shader and material ───────────────────────────────────────
     const auto shadowVertSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/shadow.vert");
     const auto shadowFragSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/shadow.frag");
@@ -432,7 +473,21 @@ int main() {
     deferredMat.addTexture("uPrefilteredMap",  ibl.prefilteredHandle);
     deferredMat.addTexture("uBRDFLUT",         ibl.brdfLUTHandle);
     deferredMat.addTexture("uSSAO",            ssaoBlurTex);
-    deferredMat.set("uMaxPrefilteredLOD", maxLOD);
+    for (int i = 0; i < MAX_SHADOW_LIGHTS; ++i)
+        deferredMat.addTexture("uPointShadowMaps[" + std::to_string(i) + "]",
+                               pointShadowHandles[i]);
+    deferredMat.set("uMaxPrefilteredLOD",   maxLOD);
+    deferredMat.set("uPointShadowFarPlane", POINT_SHADOW_FAR);
+
+    // ── Point-shadow depth shader and material ────────────────────────────────
+    const auto ptShadowVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/point_shadow.vert");
+    const auto ptShadowFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/point_shadow.frag");
+    const auto ptShadowShader  = renderer.createShader(ptShadowVertSrc, ptShadowFragSrc);
+    const auto ptShadowMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = ptShadowShader,
+        .renderState  = {},
+    });
+    sonnet::api::render::MaterialInstance ptShadowMat{ptShadowMatTmpl};
 
     FlyCamera flyCamera{cameraObj.transform};
 
@@ -451,6 +506,7 @@ int main() {
     float     ssaoBias        = 0.05f;
     bool      ssaoShow        = false; // debug: show raw AO buffer
     bool      fxaaEnabled     = true;
+    float     pointShadowBias = 0.008f;
     bool      uiMode          = false;
 
     // Per-object PBR scalar multipliers — applied on top of the ORM texture.
@@ -630,6 +686,77 @@ int main() {
             .lightSpaceMatrix = lightSpaceMat,
         };
 
+        // ── Pass 1.2: point-light shadow cubemaps ─────────────────────────────
+        // Render scene geometry into each enabled light's depth cubemap (6 faces).
+        // Up to MAX_SHADOW_LIGHTS lights cast shadows; additional lights illuminate only.
+        int shadowLightCount = 0;
+        {
+            // 6 face views relative to each light position (90° FOV cube capture).
+            const glm::mat4 ptShadowProj = glm::perspective(
+                glm::radians(90.0f), 1.0f, 0.01f, POINT_SHADOW_FAR);
+            auto faceViewsFor = [](const glm::vec3 &p) {
+                return std::array<glm::mat4, 6>{
+                    glm::lookAt(p, p + glm::vec3{ 1, 0, 0}, {0,-1, 0}),
+                    glm::lookAt(p, p + glm::vec3{-1, 0, 0}, {0,-1, 0}),
+                    glm::lookAt(p, p + glm::vec3{ 0, 1, 0}, {0, 0, 1}),
+                    glm::lookAt(p, p + glm::vec3{ 0,-1, 0}, {0, 0,-1}),
+                    glm::lookAt(p, p + glm::vec3{ 0, 0, 1}, {0,-1, 0}),
+                    glm::lookAt(p, p + glm::vec3{ 0, 0,-1}, {0,-1, 0}),
+                };
+            };
+
+            // Build shadow geometry queue (scene objects only — not indicator spheres).
+            std::vector<sonnet::api::render::RenderItem> ptShadowQueue;
+            for (const auto &obj : scene.objects()) {
+                if (!obj->render) continue;
+                ptShadowQueue.push_back({
+                    .mesh        = obj->render->mesh,
+                    .material    = ptShadowMat,
+                    .modelMatrix = obj->transform.getModelMatrix(),
+                });
+            }
+
+            glBindFramebuffer(GL_FRAMEBUFFER, pointShadowFBO);
+            glDepthMask(GL_TRUE);
+            glEnable(GL_DEPTH_TEST);
+            backend.setViewport(POINT_SHADOW_SIZE, POINT_SHADOW_SIZE);
+
+            for (const auto &pl : ctxPointLights) {
+                if (shadowLightCount >= MAX_SHADOW_LIGHTS) break;
+                const int   shadowIdx = shadowLightCount;
+                const auto  faceViews = faceViewsFor(pl.position);
+                ptShadowMat.set("uLightPos",  pl.position);
+                ptShadowMat.set("uFarPlane",  POINT_SHADOW_FAR);
+
+                for (int f = 0; f < 6; ++f) {
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                           GL_TEXTURE_CUBE_MAP_POSITIVE_X + f,
+                                           pointShadowCubeTex[shadowIdx], 0);
+                    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+                    glClearColor(1.0f, 0.0f, 0.0f, 1.0f); // far = max distance
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+                    const sonnet::api::render::FrameContext faceCtx{
+                        .viewMatrix       = faceViews[f],
+                        .projectionMatrix = ptShadowProj,
+                        .viewPosition     = pl.position,
+                        .viewportWidth    = POINT_SHADOW_SIZE,
+                        .viewportHeight   = POINT_SHADOW_SIZE,
+                        .deltaTime        = 0.0f,
+                    };
+                    renderer.beginFrame();
+                    renderer.render(faceCtx, ptShadowQueue);
+                    renderer.endFrame();
+                }
+                ++shadowLightCount;
+            }
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // restore default clear colour
+        }
+        deferredMat.set("uPointShadowCount", shadowLightCount);
+        deferredMat.set("uPointShadowBias",  pointShadowBias);
+
         // ── Pass 1.5: G-buffer — all scene geometry → gbufRT ──────────────────
         renderer.bindRenderTarget(gbufRTHandle);
         backend.setViewport(fbSize.x, fbSize.y);
@@ -786,7 +913,10 @@ int main() {
             }
 
             if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Bias", &shadowBias, 0.0001f, 0.05f, "%.4f");
+                ImGui::SliderFloat("Dir bias",   &shadowBias,       0.0001f, 0.05f,  "%.4f");
+                ImGui::SliderFloat("Point bias", &pointShadowBias,  0.001f,  0.05f,  "%.4f");
+                ImGui::TextDisabled("Point shadow lights: %d / %d",
+                                    shadowLightCount, MAX_SHADOW_LIGHTS);
             }
 
             if (ImGui::CollapsingHeader("Tone-mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
