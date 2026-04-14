@@ -57,7 +57,7 @@ endforeach()
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.91.6
+    GIT_TAG docking
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(imgui)

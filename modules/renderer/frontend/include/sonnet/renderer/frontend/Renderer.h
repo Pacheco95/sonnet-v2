@@ -39,6 +39,9 @@ public:
     [[nodiscard]] core::GPUTextureHandle         depthTextureHandle(core::RenderTargetHandle handle);
     // Register an externally-created ITexture (e.g. IBL cubemaps) and return a handle.
     [[nodiscard]] core::GPUTextureHandle         registerRawTexture(std::unique_ptr<api::render::ITexture> tex);
+    // Return the backend-native texture id (e.g. GLuint) for a texture handle.
+    // Useful for passing render-target textures to ImGui::Image.
+    [[nodiscard]] unsigned                       nativeTextureId(core::GPUTextureHandle handle) const;
 
     // ── IRenderer ─────────────────────────────────────────────────────────────
     void beginFrame() override;

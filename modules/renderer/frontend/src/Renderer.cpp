@@ -112,6 +112,13 @@ GPUTextureHandle Renderer::registerRawTexture(std::unique_ptr<ITexture> tex) {
     return handle;
 }
 
+unsigned Renderer::nativeTextureId(GPUTextureHandle handle) const {
+    auto it = m_textures.find(handle);
+    if (it == m_textures.end())
+        throw std::invalid_argument("nativeTextureId: unknown GPUTextureHandle");
+    return it->second->getNativeHandle();
+}
+
 void Renderer::beginFrame() {
     m_backend.beginFrame();
 }

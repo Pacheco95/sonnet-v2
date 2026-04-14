@@ -16,6 +16,7 @@
 #include <sonnet/world/Scene.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -273,6 +274,29 @@ int main() {
         outFile << doc.dump(4) << '\n';
     };
 
+    // ── Asset name caches (for the Assets browser panel) ─────────────────────
+    std::vector<std::string> assetMeshNames, assetMaterialNames,
+                             assetTextureNames, assetShaderNames;
+    {
+        std::ifstream f{kSceneFile};
+        if (f) {
+            auto doc = nlohmann::json::parse(f, nullptr, false);
+            if (!doc.is_discarded() && doc.contains("assets")) {
+                const auto &assets = doc["assets"];
+                auto collect = [](const nlohmann::json &section,
+                                  std::vector<std::string> &out) {
+                    if (section.is_object())
+                        for (const auto &[k, v] : section.items())
+                            out.push_back(k);
+                };
+                collect(assets.value("meshes",    nlohmann::json::object()), assetMeshNames);
+                collect(assets.value("materials", nlohmann::json::object()), assetMaterialNames);
+                collect(assets.value("textures",  nlohmann::json::object()), assetTextureNames);
+                collect(assets.value("shaders",   nlohmann::json::object()), assetShaderNames);
+            }
+        }
+    }
+
     // ── HDR render target ─────────────────────────────────────────────────────
     const auto fbSize0    = window.getFrameBufferSize();
     const auto hdrRTHandle = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
@@ -378,6 +402,23 @@ int main() {
         }},
     });
     const auto ldrTex = renderer.colorTextureHandle(ldrRT, 0);
+
+    // ── Viewport render target (final output shown in ImGui Viewport panel) ────
+    const auto viewportRT = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+        .width  = fbSize0.x,
+        .height = fbSize0.y,
+        .colors = {{
+            .format      = sonnet::api::render::TextureFormat::RGBA8,
+            .samplerDesc = {
+                .minFilter = sonnet::api::render::MinFilter::Linear,
+                .magFilter = sonnet::api::render::MagFilter::Linear,
+                .wrapS     = sonnet::api::render::TextureWrap::ClampToEdge,
+                .wrapT     = sonnet::api::render::TextureWrap::ClampToEdge,
+            },
+        }},
+    });
+    const auto viewportTex   = renderer.colorTextureHandle(viewportRT, 0);
+    const auto viewportTexId = static_cast<GLuint>(renderer.nativeTextureId(viewportTex));
 
     // ── Bloom render targets (same resolution as HDR) ─────────────────────────
     const auto makeBloomRT = [&]() {
@@ -583,7 +624,7 @@ int main() {
     float     ssrRoughnessMax = 0.4f;
     float     ssrStrength     = 1.0f;
     float     pointShadowBias = 0.008f;
-    bool      uiMode          = false;
+    bool      viewportFocused = false; // updated each frame from ImGui, used next frame
 
     // Per-object PBR scalar multipliers — applied on top of the ORM texture.
     // 1.0 = let the texture drive everything.
@@ -628,16 +669,14 @@ int main() {
         if (input.isKeyJustPressed(sonnet::api::input::Key::Escape))
             window.requestClose();
 
-        if (input.isKeyJustPressed(sonnet::api::input::Key::Tab))
-            uiMode = !uiMode;
-
         const auto fbSize = window.getFrameBufferSize();
 
-        if (uiMode) {
-            window.releaseCursor();
-        } else if (input.isMouseDown(sonnet::api::input::MouseButton::Right)) {
+        // Camera controlled by RMB only when the 3D viewport panel is focused.
+        if (viewportFocused && input.isMouseDown(sonnet::api::input::MouseButton::Right)) {
             window.captureCursor();
             flyCamera.update(dt, input);
+        } else {
+            window.releaseCursor();
         }
 
         rotation += rotationSpeed * dt;
@@ -1042,165 +1081,247 @@ int main() {
         tonemapMat.set("uSSRStrength",    ssrEnabled ? ssrStrength : 0.0f);
 
         if (ssaoShow) {
-            // ── Debug: show raw SSAO buffer as grayscale ─────────────────────
-            backend.bindDefaultRenderTarget();
+            // ── Debug: show raw SSAO buffer as grayscale → viewportRT ────────
+            renderer.bindRenderTarget(viewportRT);
             backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
             fullscreenQuad(ssaoShowMat);
         } else if (fxaaEnabled) {
-            // ── Pass 3: tone-map HDR -> LDR RT ───────────────────────────────
+            // ── Pass 3: tone-map HDR → ldrRT ─────────────────────────────────
             renderer.bindRenderTarget(ldrRT);
             backend.setViewport(fbSize.x, fbSize.y);
             backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
             fullscreenQuad(tonemapMat);
 
-            // ── Pass 4: FXAA LDR RT -> default framebuffer ───────────────────
-            backend.bindDefaultRenderTarget();
+            // ── Pass 4: FXAA ldrRT → viewportRT ──────────────────────────────
+            renderer.bindRenderTarget(viewportRT);
             backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
             fxaaMat.set("uTexelSize", glm::vec2(1.0f / fbSize.x, 1.0f / fbSize.y));
             fullscreenQuad(fxaaMat);
         } else {
-            // ── Pass 3 (no FXAA): tone-map HDR directly -> default framebuffer
-            backend.bindDefaultRenderTarget();
+            // ── Pass 3 (no FXAA): tone-map HDR → viewportRT ──────────────────
+            renderer.bindRenderTarget(viewportRT);
             backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
             fullscreenQuad(tonemapMat);
         }
 
-        // ── ImGui ──────────────────────────────────────────────────────────────
+        // Bind default framebuffer for ImGui rendering.
+        backend.bindDefaultRenderTarget();
+        backend.setViewport(fbSize.x, fbSize.y);
+        glClearColor(0.08f, 0.08f, 0.08f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // ── ImGui: engine UI ───────────────────────────────────────────────────
         imgui.begin();
-        if (uiMode) {
-            ImGui::Begin("Debug  [Tab to close]");
 
-            if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::DragFloat3("Direction",       &lightDir.x,     0.01f, -1.0f, 1.0f);
-                ImGui::ColorEdit3("Color",           &lightColor.x);
-                ImGui::SliderFloat("Intensity##light",&lightIntensity, 0.0f,  4.0f);
-            }
-
-            if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Dir bias",   &shadowBias,       0.0001f, 0.05f,  "%.4f");
-                ImGui::SliderFloat("Point bias", &pointShadowBias,  0.001f,  0.05f,  "%.4f");
-                ImGui::TextDisabled("Point shadow lights: %d / %d",
-                                    shadowLightCount, MAX_SHADOW_LIGHTS);
+        // ── Main menu bar ──────────────────────────────────────────────────────
+        if (ImGui::BeginMainMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Save Scene", "Ctrl+S")) saveScene();
                 ImGui::Separator();
-                ImGui::TextDisabled("CSM cascade splits (view-space):");
-                for (int c = 0; c < NUM_CASCADES; ++c)
-                    ImGui::TextDisabled("  Cascade %d: %.2f m", c, csmSplitDepths[c]);
+                if (ImGui::MenuItem("Exit")) window.requestClose();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Edit")) {
+                ImGui::TextDisabled("No actions yet");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Window")) {
+                ImGui::TextDisabled("Drag panels to re-dock them");
+                ImGui::EndMenu();
+            }
+            ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - 80.0f);
+            ImGui::TextDisabled("%.0f FPS", ImGui::GetIO().Framerate);
+            ImGui::EndMainMenuBar();
+        }
+
+        // ── Full-window DockSpace ──────────────────────────────────────────────
+        {
+            const ImGuiViewport *vp = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(vp->WorkPos);
+            ImGui::SetNextWindowSize(vp->WorkSize);
+            ImGui::SetNextWindowViewport(vp->ID);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+            constexpr ImGuiWindowFlags dsFlags =
+                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_NoResize   | ImGuiWindowFlags_NoMove    |
+                ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                ImGuiWindowFlags_NoDocking  | ImGuiWindowFlags_NoBackground;
+            ImGui::Begin("##DockspaceHost", nullptr, dsFlags);
+            ImGui::PopStyleVar(3);
+
+            const ImGuiID dockId = ImGui::GetID("MainDockSpace");
+            ImGui::DockSpace(dockId, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+
+            // Build default layout once (first run only — overridden by saved .ini afterwards).
+            static bool layoutBuilt = false;
+            if (!layoutBuilt) {
+                layoutBuilt = true;
+                ImGui::DockBuilderRemoveNode(dockId);
+                ImGui::DockBuilderAddNode(dockId, ImGuiDockNodeFlags_DockSpace);
+                ImGui::DockBuilderSetNodeSize(dockId, vp->WorkSize);
+
+                ImGuiID left, mid;
+                ImGui::DockBuilderSplitNode(dockId, ImGuiDir_Left, 0.18f, &left, &mid);
+
+                ImGuiID right, center;
+                ImGui::DockBuilderSplitNode(mid, ImGuiDir_Right, 0.25f, &right, &center);
+
+                ImGuiID viewport, bottom;
+                ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.22f, &bottom, &viewport);
+
+                ImGui::DockBuilderDockWindow("Scene Hierarchy", left);
+                ImGui::DockBuilderDockWindow("Viewport",        viewport);
+                ImGui::DockBuilderDockWindow("Inspector",       right);
+                ImGui::DockBuilderDockWindow("Render Settings", right);
+                ImGui::DockBuilderDockWindow("Assets",          bottom);
+                ImGui::DockBuilderFinish(dockId);
             }
 
-            if (ImGui::CollapsingHeader("Tone-mapping", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f);
+            ImGui::End(); // DockspaceHost
+        }
+
+        // ── Viewport panel ─────────────────────────────────────────────────────
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::Begin("Viewport");
+        {
+            viewportFocused = ImGui::IsWindowFocused() || ImGui::IsWindowHovered();
+            const ImVec2 sz = ImGui::GetContentRegionAvail();
+            // Flip V so the OpenGL texture (bottom-left origin) displays right-side up.
+            ImGui::Image(
+                static_cast<ImTextureID>(static_cast<uintptr_t>(viewportTexId)),
+                sz, ImVec2(0, 1), ImVec2(1, 0));
+            // Hint when no camera control is active.
+            if (!input.isMouseDown(sonnet::api::input::MouseButton::Right)) {
+                ImGui::SetCursorPos(ImVec2(8, 28));
+                ImGui::TextDisabled("Hold RMB + WASDQE to fly");
             }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
 
-            if (ImGui::CollapsingHeader("Point Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
-                int removeIdx = -1;
-                for (int i = 0; i < static_cast<int>(pointLights.size()); ++i) {
-                    ImGui::PushID(i);
-                    auto &pl = pointLights[i];
+        // ── Scene Hierarchy panel ─────────────────────────────────────────────
+        ImGui::Begin("Scene Hierarchy");
+        {
+            // Build Transform* → GameObject* map for parent lookup.
+            std::unordered_map<const sonnet::world::Transform *,
+                               sonnet::world::GameObject *> tfToObj;
+            for (auto &obj : scene.objects())
+                tfToObj[&obj->transform] = obj.get();
 
-                    // Collapsing header per light.
-                    const std::string label = (i == 0)
-                        ? "Lamp (light 0)"
-                        : "Light " + std::to_string(i);
-                    bool open = ImGui::CollapsingHeader(label.c_str(),
-                                    ImGuiTreeNodeFlags_DefaultOpen);
-                    if (open) {
-                        ImGui::Checkbox("Enabled", &pl.enabled);
-                        ImGui::ColorEdit3("Color",        &pl.color.x);
-                        ImGui::SliderFloat("Intensity", &pl.intensity, 0.0f, 20.0f);
-                        if (i == 0) {
-                            // Lamp sphere position: read-only display.
-                            const glm::vec3 p = lamp.transform.getWorldPosition();
-                            ImGui::TextDisabled("Position  %.2f  %.2f  %.2f", p.x, p.y, p.z);
-                        } else {
-                            ImGui::DragFloat3("Position", &pl.position.x, 0.05f);
-                            if (ImGui::Button("Remove")) removeIdx = i;
+            std::function<void(sonnet::world::GameObject &)> drawNode =
+                [&](sonnet::world::GameObject &obj) {
+                    std::vector<sonnet::world::GameObject *> childObjs;
+                    for (auto *childTf : obj.transform.children()) {
+                        auto it = tfToObj.find(childTf);
+                        if (it != tfToObj.end())
+                            childObjs.push_back(it->second);
+                    }
+                    ImGuiTreeNodeFlags flags =
+                        ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+                    if (childObjs.empty())
+                        flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+                    if (&obj == selectedObject)
+                        flags |= ImGuiTreeNodeFlags_Selected;
+
+                    const bool opened = ImGui::TreeNodeEx(obj.name.c_str(), flags);
+                    if (ImGui::IsItemClicked()) {
+                        if (selectedObject != &obj) {
+                            selectedObject = &obj;
+                            editEuler = glm::degrees(glm::eulerAngles(
+                                obj.transform.getLocalRotation()));
                         }
                     }
-                    ImGui::PopID();
-                }
-                if (removeIdx >= 0)
-                    pointLights.erase(pointLights.begin() + removeIdx);
-
-                if (static_cast<int>(pointLights.size()) < 8) {
-                    if (ImGui::Button("+ Add Light")) {
-                        pointLights.push_back({
-                            .color    = {1.0f, 1.0f, 1.0f},
-                            .intensity = 3.0f,
-                            .position  = camPos, // spawn at camera position
-                            .enabled   = true,
-                        });
+                    if (opened && !childObjs.empty()) {
+                        for (auto *child : childObjs) drawNode(*child);
+                        ImGui::TreePop();
                     }
-                } else {
-                    ImGui::TextDisabled("Maximum 8 lights reached.");
+                };
+
+            for (auto &obj : scene.objects())
+                if (obj->transform.getParent() == nullptr)
+                    drawNode(*obj);
+
+            ImGui::Separator();
+            if (ImGui::Button("Save Scene"))
+                saveScene();
+            ImGui::SameLine();
+            ImGui::TextDisabled("persists transforms");
+        }
+        ImGui::End();
+
+        // ── Inspector panel ───────────────────────────────────────────────────
+        ImGui::Begin("Inspector");
+        if (selectedObject) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.4f, 1.0f));
+            ImGui::Text("%s", selectedObject->name.c_str());
+            ImGui::PopStyleColor();
+            ImGui::Separator();
+
+            // ── Transform ─────────────────────────────────────────────────────
+            if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+                glm::vec3 pos = selectedObject->transform.getLocalPosition();
+                if (ImGui::DragFloat3("Position", &pos.x, 0.01f))
+                    selectedObject->transform.setLocalPosition(pos);
+
+                if (ImGui::DragFloat3("Rotation", &editEuler.x, 0.5f))
+                    selectedObject->transform.setLocalRotation(
+                        glm::quat(glm::radians(editEuler)));
+
+                glm::vec3 scl = selectedObject->transform.getLocalScale();
+                if (ImGui::DragFloat3("Scale", &scl.x, 0.01f, 0.001f, 100.0f))
+                    selectedObject->transform.setLocalScale(scl);
+            }
+
+            // ── Render component ───────────────────────────────────────────────
+            if (selectedObject->render) {
+                if (ImGui::CollapsingHeader("Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::TextDisabled("Mesh handle:     %llu",
+                        static_cast<unsigned long long>(selectedObject->render->mesh.value));
+                    ImGui::TextDisabled("Material handle: %llu",
+                        static_cast<unsigned long long>(
+                            selectedObject->render->material.templateHandle().value));
+
+                    // Editable PBR scalars for the Cube and Floor objects.
+                    if (selectedObject == &cube) {
+                        ImGui::SliderFloat("Metallic##cube",  &cubeMetallic,  0.0f, 1.0f);
+                        ImGui::SliderFloat("Roughness##cube", &cubeRoughness, 0.0f, 1.0f);
+                    } else if (selectedObject == &floor) {
+                        ImGui::SliderFloat("Metallic##floor",  &floorMetallic,  0.0f, 1.0f);
+                        ImGui::SliderFloat("Roughness##floor", &floorRoughness, 0.0f, 1.0f);
+                    }
                 }
             }
 
-            if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Threshold##bloom",  &bloomThreshold,  0.5f, 3.0f);
-                ImGui::SliderFloat("Intensity##bloom",  &bloomIntensity,  0.0f, 3.0f);
-                ImGui::SliderInt  ("Iterations##bloom", &bloomIterations, 1,    8);
+            // ── Camera component ───────────────────────────────────────────────
+            if (selectedObject->camera) {
+                if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::SliderFloat("FOV",  &selectedObject->camera->fov,  10.0f, 120.0f);
+                    ImGui::SliderFloat("Near", &selectedObject->camera->near,  0.01f,  5.0f);
+                    ImGui::SliderFloat("Far",  &selectedObject->camera->far,  10.0f, 500.0f);
+                    const glm::vec3 p = selectedObject->transform.getWorldPosition();
+                    ImGui::TextDisabled("World pos %.2f  %.2f  %.2f", p.x, p.y, p.z);
+                }
             }
 
-            if (ImGui::CollapsingHeader("SSAO", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Checkbox   ("Enable##ssao",  &ssaoEnabled);
-                ImGui::Checkbox   ("Visualize AO",  &ssaoShow);
-                ImGui::SliderFloat("Radius##ssao",  &ssaoRadius, 0.1f, 3.0f);
-                ImGui::SliderFloat("Bias##ssao",    &ssaoBias,   0.01f, 0.2f, "%.3f");
-            }
-
-            if (ImGui::CollapsingHeader("SSR", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Checkbox   ("Enable##ssr",        &ssrEnabled);
-                ImGui::SliderFloat("Strength##ssr",      &ssrStrength,     0.0f, 2.0f);
-                ImGui::SliderInt  ("Max Steps##ssr",     &ssrMaxSteps,     8,    128);
-                ImGui::SliderFloat("Step Size##ssr",     &ssrStepSize,     0.01f, 0.5f);
-                ImGui::SliderFloat("Thickness##ssr",     &ssrThickness,    0.01f, 1.0f);
-                ImGui::SliderFloat("Max Distance##ssr",  &ssrMaxDistance,  1.0f,  30.0f);
-                ImGui::SliderFloat("Roughness Max##ssr", &ssrRoughnessMax, 0.0f,  1.0f);
-                ImGui::TextDisabled("Only affects metallic/smooth surfaces");
-            }
-
-            if (ImGui::CollapsingHeader("Anti-aliasing", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Checkbox("FXAA", &fxaaEnabled);
-                ImGui::TextDisabled("Look at diagonal edges (helmet, cube corners)");
-            }
-
-            if (ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Text("Cube");
-                ImGui::SliderFloat("Metallic##cube",  &cubeMetallic,  0.0f, 1.0f);
-                ImGui::SliderFloat("Roughness##cube", &cubeRoughness, 0.0f, 1.0f);
-                ImGui::Spacing();
-                ImGui::Text("Floor");
-                ImGui::SliderFloat("Metallic##floor",  &floorMetallic,  0.0f, 1.0f);
-                ImGui::SliderFloat("Roughness##floor", &floorRoughness, 0.0f, 1.0f);
-            }
-
-            if (ImGui::CollapsingHeader("Object", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Rotation speed (deg/s)", &rotationSpeed, 0.0f, 360.0f);
-            }
-
-            if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-                const glm::vec3 p = cameraObj.transform.getWorldPosition();
-                ImGui::Text("Position  %.2f  %.2f  %.2f", p.x, p.y, p.z);
-                ImGui::Text("%.1f FPS", ImGui::GetIO().Framerate);
-            }
-
-            // ── Animation controls ─────────────────────────────────────────────
-            for (const auto &obj : scene.objects()) {
-                if (!obj->animationPlayer) continue;
-                auto &ap = *obj->animationPlayer;
-                if (ap.clips.empty()) continue;
-                const std::string header = "Animation: " + obj->name;
-                if (ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::PushID(obj->name.c_str());
-                    // Clip selector
+            // ── Animation component ────────────────────────────────────────────
+            if (selectedObject->animationPlayer) {
+                auto &ap = *selectedObject->animationPlayer;
+                if (!ap.clips.empty() &&
+                    ImGui::CollapsingHeader("Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::PushID("anim");
                     if (ap.clips.size() > 1) {
                         if (ImGui::BeginCombo("Clip", ap.clips[ap.currentClip].name.c_str())) {
                             for (int c = 0; c < static_cast<int>(ap.clips.size()); ++c) {
                                 const bool sel = (c == ap.currentClip);
                                 if (ImGui::Selectable(ap.clips[c].name.c_str(), sel)) {
                                     ap.currentClip = c;
-                                    ap.time        = 0.0f;
-                                    ap.playing     = true;
+                                    ap.time = 0.0f;
+                                    ap.playing = true;
                                 }
                                 if (sel) ImGui::SetItemDefaultFocus();
                             }
@@ -1209,94 +1330,127 @@ int main() {
                     } else {
                         ImGui::TextDisabled("Clip: %s", ap.clips[0].name.c_str());
                     }
-                    // Play / pause
                     if (ImGui::Button(ap.playing ? "Pause" : "Play")) ap.playing = !ap.playing;
                     ImGui::SameLine();
                     if (ImGui::Button("Restart")) { ap.time = 0.0f; ap.playing = true; }
                     ImGui::SameLine();
                     ImGui::Checkbox("Loop", &ap.loop);
-                    // Time scrubber
                     const float dur = ap.clips[ap.currentClip].duration;
                     ImGui::SliderFloat("Time", &ap.time, 0.0f, dur > 0.0f ? dur : 1.0f, "%.2f s");
                     ImGui::PopID();
                 }
             }
-
-            ImGui::End();
+        } else {
+            ImGui::TextDisabled("Select an object in the Scene Hierarchy");
         }
+        ImGui::End();
 
-        // ── Scene Hierarchy window ─────────────────────────────────────────────
-        ImGui::Begin("Scene Hierarchy");
-
-        // Build a map from Transform* -> GameObject* for parent lookup.
-        std::unordered_map<const sonnet::world::Transform *, sonnet::world::GameObject *> tfToObj;
-        for (auto &obj : scene.objects())
-            tfToObj[&obj->transform] = obj.get();
-
-        // Recursive node draw.
-        std::function<void(sonnet::world::GameObject &)> drawNode =
-            [&](sonnet::world::GameObject &obj) {
-                // Collect child GameObjects (transform children that are scene objects).
-                std::vector<sonnet::world::GameObject *> childObjs;
-                for (auto *childTf : obj.transform.children()) {
-                    auto it = tfToObj.find(childTf);
-                    if (it != tfToObj.end())
-                        childObjs.push_back(it->second);
-                }
-
-                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
-                                           ImGuiTreeNodeFlags_SpanAvailWidth;
-                if (childObjs.empty())
-                    flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-                if (&obj == selectedObject)
-                    flags |= ImGuiTreeNodeFlags_Selected;
-
-                bool opened = ImGui::TreeNodeEx(obj.name.c_str(), flags);
-                if (ImGui::IsItemClicked()) {
-                    if (selectedObject != &obj) {
-                        selectedObject = &obj;
-                        editEuler = glm::degrees(glm::eulerAngles(
-                            obj.transform.getLocalRotation()));
-                    }
-                }
-                if (opened && !childObjs.empty()) {
-                    for (auto *child : childObjs)
-                        drawNode(*child);
-                    ImGui::TreePop();
+        // ── Assets panel ──────────────────────────────────────────────────────
+        ImGui::Begin("Assets");
+        if (ImGui::BeginTabBar("AssetTabs")) {
+            auto listAssets = [](const char *label,
+                                 const std::vector<std::string> &names,
+                                 const char *icon) {
+                if (ImGui::BeginTabItem(label)) {
+                    ImGui::BeginChild("scroll");
+                    for (const auto &n : names)
+                        ImGui::TextUnformatted((std::string(icon) + "  " + n).c_str());
+                    if (names.empty()) ImGui::TextDisabled("(none)");
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
                 }
             };
-
-        // Draw only root objects (no transform parent).
-        for (auto &obj : scene.objects()) {
-            if (obj->transform.getParent() == nullptr)
-                drawNode(*obj);
+            listAssets("Meshes",    assetMeshNames,     "[M]");
+            listAssets("Materials", assetMaterialNames, "[MAT]");
+            listAssets("Textures",  assetTextureNames,  "[TEX]");
+            listAssets("Shaders",   assetShaderNames,   "[SHD]");
+            ImGui::EndTabBar();
         }
-
-        // Transform editor for selected object.
-        if (selectedObject) {
-            ImGui::Separator();
-            ImGui::TextDisabled("%s", selectedObject->name.c_str());
-
-            glm::vec3 pos = selectedObject->transform.getLocalPosition();
-            if (ImGui::DragFloat3("Position##hier", &pos.x, 0.01f))
-                selectedObject->transform.setLocalPosition(pos);
-
-            if (ImGui::DragFloat3("Rotation##hier", &editEuler.x, 0.5f))
-                selectedObject->transform.setLocalRotation(
-                    glm::quat(glm::radians(editEuler)));
-
-            glm::vec3 scl = selectedObject->transform.getLocalScale();
-            if (ImGui::DragFloat3("Scale##hier", &scl.x, 0.01f, 0.001f, 100.0f))
-                selectedObject->transform.setLocalScale(scl);
-        }
-
-        ImGui::Separator();
-        if (ImGui::Button("Save Scene"))
-            saveScene();
-        ImGui::SameLine();
-        ImGui::TextDisabled("writes transforms to scene.json");
-
         ImGui::End();
+
+        // ── Render Settings panel ─────────────────────────────────────────────
+        ImGui::Begin("Render Settings");
+
+        if (ImGui::CollapsingHeader("Directional Light")) {
+            ImGui::DragFloat3("Direction",      &lightDir.x,      0.01f, -1.0f, 1.0f);
+            ImGui::ColorEdit3("Color##sun",     &lightColor.x);
+            ImGui::SliderFloat("Intensity##sun",&lightIntensity,  0.0f,  4.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Point Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+            int removeIdx = -1;
+            for (int i = 0; i < static_cast<int>(pointLights.size()); ++i) {
+                ImGui::PushID(i);
+                auto &pl = pointLights[i];
+                const std::string label = (i == 0) ? "Lamp" : "Light " + std::to_string(i);
+                if (ImGui::CollapsingHeader(label.c_str())) {
+                    ImGui::Checkbox("Enabled", &pl.enabled);
+                    ImGui::ColorEdit3("Color##pl",        &pl.color.x);
+                    ImGui::SliderFloat("Intensity##pl", &pl.intensity, 0.0f, 20.0f);
+                    if (i == 0) {
+                        const glm::vec3 p = lamp.transform.getWorldPosition();
+                        ImGui::TextDisabled("Pos  %.2f  %.2f  %.2f", p.x, p.y, p.z);
+                    } else {
+                        ImGui::DragFloat3("Position##pl", &pl.position.x, 0.05f);
+                        if (ImGui::Button("Remove")) removeIdx = i;
+                    }
+                }
+                ImGui::PopID();
+            }
+            if (removeIdx >= 0)
+                pointLights.erase(pointLights.begin() + removeIdx);
+            if (static_cast<int>(pointLights.size()) < 8) {
+                if (ImGui::Button("+ Add Point Light"))
+                    pointLights.push_back({.color={1,1,1},.intensity=3,.position=camPos,.enabled=true});
+            } else {
+                ImGui::TextDisabled("Max 8 lights");
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Shadows")) {
+            ImGui::SliderFloat("Dir bias",    &shadowBias,       0.0001f, 0.05f, "%.4f");
+            ImGui::SliderFloat("Point bias",  &pointShadowBias,  0.001f,  0.05f, "%.4f");
+            ImGui::TextDisabled("Shadow lights: %d / %d", shadowLightCount, MAX_SHADOW_LIGHTS);
+            for (int c = 0; c < NUM_CASCADES; ++c)
+                ImGui::TextDisabled("  Cascade %d split: %.2f m", c, csmSplitDepths[c]);
+        }
+
+        if (ImGui::CollapsingHeader("Tone-mapping")) {
+            ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Bloom")) {
+            ImGui::SliderFloat("Threshold##bloom",  &bloomThreshold,  0.5f, 3.0f);
+            ImGui::SliderFloat("Intensity##bloom",  &bloomIntensity,  0.0f, 3.0f);
+            ImGui::SliderInt  ("Iterations##bloom", &bloomIterations, 1,    8);
+        }
+
+        if (ImGui::CollapsingHeader("SSAO")) {
+            ImGui::Checkbox   ("Enable##ssao",  &ssaoEnabled);
+            ImGui::Checkbox   ("Visualize AO",  &ssaoShow);
+            ImGui::SliderFloat("Radius##ssao",  &ssaoRadius, 0.1f, 3.0f);
+            ImGui::SliderFloat("Bias##ssao",    &ssaoBias,   0.01f, 0.2f, "%.3f");
+        }
+
+        if (ImGui::CollapsingHeader("SSR")) {
+            ImGui::Checkbox   ("Enable##ssr",        &ssrEnabled);
+            ImGui::SliderFloat("Strength##ssr",      &ssrStrength,     0.0f, 2.0f);
+            ImGui::SliderInt  ("Max Steps##ssr",     &ssrMaxSteps,     8,    128);
+            ImGui::SliderFloat("Step Size##ssr",     &ssrStepSize,     0.01f, 0.5f);
+            ImGui::SliderFloat("Thickness##ssr",     &ssrThickness,    0.01f, 1.0f);
+            ImGui::SliderFloat("Max Distance##ssr",  &ssrMaxDistance,  1.0f,  30.0f);
+            ImGui::SliderFloat("Roughness Max##ssr", &ssrRoughnessMax, 0.0f,  1.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Anti-aliasing")) {
+            ImGui::Checkbox("FXAA", &fxaaEnabled);
+        }
+
+        if (ImGui::CollapsingHeader("Scene")) {
+            ImGui::SliderFloat("Rotation speed", &rotationSpeed, 0.0f, 360.0f);
+        }
+
+        ImGui::End(); // Render Settings
 
         imgui.end();
 
