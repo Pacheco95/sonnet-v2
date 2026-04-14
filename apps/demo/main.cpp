@@ -659,6 +659,17 @@ int main() {
     sonnet::world::GameObject *selectedObject = nullptr;
     glm::vec3                  editEuler{0.0f}; // Euler angles (degrees) for selected object
 
+    // ── Transform gizmo state ─────────────────────────────────────────────────
+    enum class GizmoMode { Translate, Rotate, Scale };
+    GizmoMode gizmoMode       = GizmoMode::Translate;
+    int       gizmoHoverAxis  = 0;  // 0=none, 1=X, 2=Y, 3=Z
+    int       gizmoActiveAxis = 0;
+    glm::vec3 dragStartPos{};
+    glm::quat dragStartRot{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 dragStartScale{1.0f};
+    ImVec2    dragStartMouse{};
+    float     dragAccum = 0.0f;
+
     while (!window.shouldClose()) {
         const double now = glfwGetTime();
         const float  dt  = static_cast<float>(now - prevTime);
@@ -1195,10 +1206,272 @@ int main() {
             ImGui::Image(
                 static_cast<ImTextureID>(static_cast<uintptr_t>(viewportTexId)),
                 sz, ImVec2(0, 1), ImVec2(1, 0));
-            // Hint when no camera control is active.
-            if (!input.isMouseDown(sonnet::api::input::MouseButton::Right)) {
+
+            // Viewport image rect — needed for picking and gizmo coordinate conversion.
+            const ImVec2 vpMin  = ImGui::GetItemRectMin();
+            const ImVec2 vpMax  = ImGui::GetItemRectMax();
+            const ImVec2 vpSize = ImVec2(vpMax.x - vpMin.x, vpMax.y - vpMin.y);
+
+            // ── Gizmo mode hot-keys (W/E/R) ───────────────────────────────────
+            if (viewportFocused) {
+                using K = sonnet::api::input::Key;
+                if (input.isKeyJustPressed(K::W)) gizmoMode = GizmoMode::Translate;
+                if (input.isKeyJustPressed(K::E)) gizmoMode = GizmoMode::Rotate;
+                if (input.isKeyJustPressed(K::R)) gizmoMode = GizmoMode::Scale;
+            }
+
+            // ── Object picking (LMB click, not over gizmo) ────────────────────
+            const bool lmbClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+            if (lmbClicked && gizmoActiveAxis == 0) {
+                const ImVec2 mp = ImGui::GetMousePos();
+                const glm::vec2 uv{(mp.x - vpMin.x) / vpSize.x,
+                                   (mp.y - vpMin.y) / vpSize.y};
+
+                // Unproject click to a world-space ray.
+                const glm::vec4 ndcNear{uv.x*2.f-1.f, (1.f-uv.y)*2.f-1.f, -1.f, 1.f};
+                const glm::vec4 ndcFar {ndcNear.x,     ndcNear.y,           1.f,  1.f};
+                const glm::mat4 invVP = glm::inverse(projMat * viewMat);
+                auto unproj = [&](glm::vec4 ndc) {
+                    glm::vec4 w = invVP * ndc;
+                    return glm::vec3(w) / w.w;
+                };
+                const glm::vec3 rayOrig = camPos;
+                const glm::vec3 rayDir  = glm::normalize(unproj(ndcFar) - unproj(ndcNear));
+
+                // Helper: walk up hierarchy to find a selectable (no '/' in name) ancestor.
+                auto selectableAncestor = [&](sonnet::world::GameObject *obj)
+                        -> sonnet::world::GameObject * {
+                    while (obj && obj->name.find('/') != std::string::npos) {
+                        auto *p = obj->transform.getParent();
+                        if (!p) break;
+                        // Find the GameObject that owns this transform.
+                        obj = nullptr;
+                        for (auto &o : scene.objects())
+                            if (&o->transform == p) { obj = o.get(); break; }
+                    }
+                    return obj;
+                };
+
+                // Ray–sphere test; pick the closest hit.
+                float bestT = std::numeric_limits<float>::max();
+                sonnet::world::GameObject *bestObj = nullptr;
+                for (auto &o : scene.objects()) {
+                    if (!o->render) continue;
+                    const glm::vec3 center = o->transform.getWorldPosition();
+                    const float     radius = glm::length(o->transform.getLocalScale()) * 0.6f;
+
+                    // Analytic ray-sphere intersection.
+                    const glm::vec3 oc = rayOrig - center;
+                    const float     b  = glm::dot(oc, rayDir);
+                    const float     c  = glm::dot(oc, oc) - radius * radius;
+                    const float  disc  = b * b - c;
+                    if (disc < 0.0f) continue;
+                    const float t = -b - std::sqrt(disc);
+                    if (t > 0.0f && t < bestT) { bestT = t; bestObj = o.get(); }
+                }
+
+                if (bestObj) {
+                    auto *sel = selectableAncestor(bestObj);
+                    selectedObject = sel ? sel : bestObj;
+                    editEuler = glm::degrees(glm::eulerAngles(
+                        selectedObject->transform.getLocalRotation()));
+                } else {
+                    // Click on empty space — deselect.
+                    selectedObject = nullptr;
+                }
+            }
+
+            // ── Transform gizmo ───────────────────────────────────────────────
+            if (selectedObject && selectedObject != &cameraObj) {
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+
+                const glm::vec3 origin = selectedObject->transform.getWorldPosition();
+                const float dist   = glm::distance(camPos, origin);
+                const float gLen   = dist * 0.15f;
+
+                // Project a world point to an ImGui screen position.
+                auto w2s = [&](glm::vec3 wp) -> std::optional<ImVec2> {
+                    glm::vec4 clip = projMat * viewMat * glm::vec4(wp, 1.0f);
+                    if (clip.w <= 0.0001f) return std::nullopt;
+                    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                    return ImVec2{vpMin.x + (ndc.x * 0.5f + 0.5f) * vpSize.x,
+                                  vpMin.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * vpSize.y};
+                };
+
+                // Distance from point P to line segment AB (2D).
+                auto ptSegDist = [](ImVec2 p, ImVec2 a, ImVec2 b) -> float {
+                    const float dx = b.x-a.x, dy = b.y-a.y;
+                    const float lenSq = dx*dx + dy*dy;
+                    if (lenSq < 1e-6f) return std::hypot(p.x-a.x, p.y-a.y);
+                    const float t = std::clamp(((p.x-a.x)*dx + (p.y-a.y)*dy) / lenSq, 0.f, 1.f);
+                    return std::hypot(p.x - (a.x+t*dx), p.y - (a.y+t*dy));
+                };
+
+                const glm::vec3 axes[4] = {{0,0,0},{1,0,0},{0,1,0},{0,0,1}};
+                constexpr ImU32 axisColors[4] = {
+                    0, IM_COL32(220,50,50,255), IM_COL32(50,220,50,255), IM_COL32(50,100,255,255)
+                };
+                constexpr ImU32 axisHover[4] = {
+                    0, IM_COL32(255,120,120,255), IM_COL32(120,255,120,255), IM_COL32(120,160,255,255)
+                };
+
+                const ImVec2 mousePos = ImGui::GetMousePos();
+                const bool   lmbDown  = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+
+                // ── End drag ──────────────────────────────────────────────────
+                if (gizmoActiveAxis > 0 && !lmbDown)
+                    gizmoActiveAxis = 0;
+
+                // ── Hover detection (only when not dragging and not RMB) ──────
+                gizmoHoverAxis = 0;
+                if (gizmoActiveAxis == 0 &&
+                    !input.isMouseDown(sonnet::api::input::MouseButton::Right)) {
+                    if (auto os = w2s(origin)) {
+                        for (int i = 1; i <= 3; ++i) {
+                            if (auto ts = w2s(origin + axes[i] * gLen)) {
+                                if (ptSegDist(mousePos, *os, *ts) < 8.0f)
+                                    gizmoHoverAxis = i;
+                            }
+                        }
+                        // For Rotate: check proximity to the projected circle center as well.
+                        if (gizmoMode == GizmoMode::Rotate && gizmoHoverAxis == 0) {
+                            for (int i = 1; i <= 3; ++i) {
+                                if (auto ts = w2s(origin + axes[i] * gLen)) {
+                                    // Distance from mouse to each axis tip circle.
+                                    const float d = std::hypot(mousePos.x - ts->x,
+                                                               mousePos.y - ts->y);
+                                    if (d < 12.0f) gizmoHoverAxis = i;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── Start drag ────────────────────────────────────────────────
+                if (lmbClicked && gizmoHoverAxis > 0) {
+                    gizmoActiveAxis = gizmoHoverAxis;
+                    dragStartPos    = selectedObject->transform.getWorldPosition();
+                    dragStartRot    = selectedObject->transform.getLocalRotation();
+                    dragStartScale  = selectedObject->transform.getLocalScale();
+                    dragStartMouse  = mousePos;
+                    dragAccum       = 0.0f;
+                }
+
+                // ── Apply drag ────────────────────────────────────────────────
+                const int activeAxis = gizmoActiveAxis > 0 ? gizmoActiveAxis
+                                                           : gizmoHoverAxis;
+                if (gizmoActiveAxis > 0 && lmbDown) {
+                    const glm::vec3 axisDir = axes[gizmoActiveAxis];
+
+                    // Project axis to screen to find screen-space drag direction.
+                    const auto os = w2s(origin);
+                    const auto ts = w2s(origin + axisDir * gLen);
+                    if (os && ts) {
+                        const ImVec2 screenAxis{ts->x - os->x, ts->y - os->y};
+                        const float  screenLen = std::hypot(screenAxis.x, screenAxis.y);
+                        if (screenLen > 0.5f) {
+                            const ImVec2 screenDir{screenAxis.x / screenLen,
+                                                   screenAxis.y / screenLen};
+                            const ImVec2 totalDelta{mousePos.x - dragStartMouse.x,
+                                                    mousePos.y - dragStartMouse.y};
+                            const float signed_px =
+                                totalDelta.x * screenDir.x + totalDelta.y * screenDir.y;
+
+                            if (gizmoMode == GizmoMode::Translate) {
+                                const float sensitivity = dist * 0.0018f;
+                                const glm::vec3 newPos =
+                                    dragStartPos + axisDir * signed_px * sensitivity;
+                                selectedObject->transform.setWorldPosition(newPos);
+                                // Keep editEuler in sync.
+                                editEuler = glm::degrees(glm::eulerAngles(
+                                    selectedObject->transform.getLocalRotation()));
+                            } else if (gizmoMode == GizmoMode::Rotate) {
+                                dragAccum = signed_px * 0.5f; // degrees
+                                const glm::quat delta = glm::angleAxis(
+                                    glm::radians(dragAccum), axisDir);
+                                selectedObject->transform.setLocalRotation(
+                                    glm::normalize(delta * dragStartRot));
+                                editEuler = glm::degrees(glm::eulerAngles(
+                                    selectedObject->transform.getLocalRotation()));
+                            } else { // Scale
+                                const float factor = 1.0f + signed_px * 0.005f;
+                                glm::vec3 newScale = dragStartScale;
+                                newScale[gizmoActiveAxis - 1] *= std::max(0.001f, factor);
+                                selectedObject->transform.setLocalScale(newScale);
+                            }
+                        }
+                    }
+                }
+
+                // ── Draw gizmo ────────────────────────────────────────────────
+                if (auto os = w2s(origin)) {
+                    for (int i = 1; i <= 3; ++i) {
+                        const ImU32 col = (i == activeAxis) ? axisHover[i] : axisColors[i];
+                        const glm::vec3 tipWorld = origin + axes[i] * gLen;
+                        const auto ts = w2s(tipWorld);
+                        if (!ts) continue;
+
+                        dl->AddLine(*os, *ts, col, 2.5f);
+
+                        // Arrowhead / handle at tip.
+                        const ImVec2 shaft{ts->x - os->x, ts->y - os->y};
+                        const float  shaftLen = std::hypot(shaft.x, shaft.y);
+                        if (shaftLen < 1.0f) continue;
+                        const ImVec2 dir{shaft.x / shaftLen, shaft.y / shaftLen};
+                        const ImVec2 perp{-dir.y, dir.x};
+                        constexpr float kHeadLen = 10.0f, kHeadW = 5.0f;
+
+                        if (gizmoMode == GizmoMode::Translate) {
+                            const ImVec2 base{ts->x - dir.x*kHeadLen,
+                                              ts->y - dir.y*kHeadLen};
+                            dl->AddTriangleFilled(
+                                *ts,
+                                ImVec2{base.x + perp.x*kHeadW, base.y + perp.y*kHeadW},
+                                ImVec2{base.x - perp.x*kHeadW, base.y - perp.y*kHeadW},
+                                col);
+                        } else if (gizmoMode == GizmoMode::Scale) {
+                            constexpr float kSq = 5.0f;
+                            dl->AddRectFilled(
+                                ImVec2{ts->x - kSq, ts->y - kSq},
+                                ImVec2{ts->x + kSq, ts->y + kSq}, col);
+                        } else { // Rotate: small circle at tip
+                            dl->AddCircleFilled(*ts, 5.0f, col);
+                        }
+                    }
+
+                    // Origin dot.
+                    dl->AddCircleFilled(*os, 4.0f, IM_COL32(220, 220, 220, 200));
+                }
+            }
+
+            // ── Toolbar overlay (mode buttons + hint) ─────────────────────────
+            {
                 ImGui::SetCursorPos(ImVec2(8, 28));
-                ImGui::TextDisabled("Hold RMB + WASDQE to fly");
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                    ImVec4(0.15f, 0.15f, 0.15f, 0.75f));
+
+                auto modeBtn = [&](const char *label, GizmoMode mode, const char *key) {
+                    const bool active = (gizmoMode == mode);
+                    if (active)
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.9f, 0.9f));
+                    if (ImGui::SmallButton((std::string(key) + " " + label).c_str()))
+                        gizmoMode = mode;
+                    if (active) ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                };
+                modeBtn("Translate", GizmoMode::Translate, "[W]");
+                modeBtn("Rotate",    GizmoMode::Rotate,    "[E]");
+                modeBtn("Scale",     GizmoMode::Scale,     "[R]");
+
+                ImGui::PopStyleColor();
+                ImGui::PopStyleVar();
+
+                if (!input.isMouseDown(sonnet::api::input::MouseButton::Right) &&
+                    !selectedObject) {
+                    ImGui::SetCursorPos(ImVec2(8, 50));
+                    ImGui::TextDisabled("Click to select  |  RMB + WASDQE to fly");
+                }
             }
         }
         ImGui::End();
