@@ -43,6 +43,13 @@ public:
     // Useful for passing render-target textures to ImGui::Image.
     [[nodiscard]] unsigned                       nativeTextureId(core::GPUTextureHandle handle) const;
 
+    // Recompile a shader in-place. The handle and all MaterialTemplates that
+    // reference it remain valid. If compilation fails the old shader is kept
+    // and the exception is re-thrown so the caller can log it.
+    void reloadShader(core::ShaderHandle handle,
+                      const std::string &vertSrc,
+                      const std::string &fragSrc);
+
     // ── IRenderer ─────────────────────────────────────────────────────────────
     void beginFrame() override;
     void render(const api::render::FrameContext &ctx,

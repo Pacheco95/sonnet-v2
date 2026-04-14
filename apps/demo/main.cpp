@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -168,10 +169,37 @@ int main() {
         pointShadowHandles[i] = renderer.registerRawTexture(
             std::make_unique<RawGLCubeMap>(pointShadowCubeTex[i]));
 
+    // ── Shader hot-reload registry ────────────────────────────────────────────
+    namespace fs = std::filesystem;
+    struct ShaderRecord {
+        sonnet::core::ShaderHandle handle;
+        std::string                vertPath;
+        std::string                fragPath;
+        fs::file_time_type         vertMtime;
+        fs::file_time_type         fragMtime;
+    };
+    std::vector<ShaderRecord> hotShaders;
+
+    // Helper: load, compile, register for hot-reload.
+    auto compileShader = [&](std::string_view vertPath, std::string_view fragPath)
+            -> sonnet::core::ShaderHandle {
+        const auto vert   = sonnet::loaders::ShaderLoader::load(vertPath);
+        const auto frag   = sonnet::loaders::ShaderLoader::load(fragPath);
+        const auto handle = renderer.createShader(vert, frag);
+        hotShaders.push_back({
+            handle,
+            std::string(vertPath),
+            std::string(fragPath),
+            fs::last_write_time(vertPath),
+            fs::last_write_time(fragPath),
+        });
+        return handle;
+    };
+
     // ── Shadow-pass shader and material ───────────────────────────────────────
-    const auto shadowVertSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/shadow.vert");
-    const auto shadowFragSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/shadow.frag");
-    const auto shadowShader   = renderer.createShader(shadowVertSrc, shadowFragSrc);
+    const auto shadowShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/shadow.vert",
+        DEMO_ASSETS_DIR "/shaders/shadow.frag");
     const auto shadowMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = shadowShader,
         .renderState  = {},
@@ -378,9 +406,9 @@ int main() {
     // ── Tone-mapping fullscreen quad ──────────────────────────────────────────
     const auto quadMesh       = sonnet::primitives::makeQuad({2.0f, 2.0f});
     const auto quadMeshHandle = renderer.createMesh(quadMesh);
-    const auto tonemapVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/tonemap.vert");
-    const auto tonemapFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/tonemap.frag");
-    const auto tonemapShader  = renderer.createShader(tonemapVertSrc, tonemapFragSrc);
+    const auto tonemapShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/tonemap.vert",
+        DEMO_ASSETS_DIR "/shaders/tonemap.frag");
     const auto tonemapMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = tonemapShader,
         .renderState  = {
@@ -475,8 +503,9 @@ int main() {
         .depthWrite = false,
         .cull       = sonnet::api::render::CullMode::None,
     };
-    const auto bloomBrightFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/bloom_bright.frag");
-    const auto bloomBrightShader  = renderer.createShader(tonemapVertSrc, bloomBrightFragSrc);
+    const auto bloomBrightShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/tonemap.vert",
+        DEMO_ASSETS_DIR "/shaders/bloom_bright.frag");
     const auto bloomBrightMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = bloomBrightShader,
         .renderState  = noDepthState,
@@ -485,8 +514,9 @@ int main() {
     bloomBrightMat.addTexture("uHdrColor", hdrTexHandle);
 
     // Blur material (shared; texture swapped each iteration).
-    const auto bloomBlurFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/bloom_blur.frag");
-    const auto bloomBlurShader  = renderer.createShader(tonemapVertSrc, bloomBlurFragSrc);
+    const auto bloomBlurShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/tonemap.vert",
+        DEMO_ASSETS_DIR "/shaders/bloom_blur.frag");
     const auto bloomBlurMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = bloomBlurShader,
         .renderState  = noDepthState,
@@ -500,8 +530,9 @@ int main() {
     bloomBlurVMat.set("uHorizontal", 0);
 
     // ── SSR shader and material ───────────────────────────────────────────────
-    const auto ssrFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssr.frag");
-    const auto ssrShader  = renderer.createShader(tonemapVertSrc, ssrFragSrc);
+    const auto ssrShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/tonemap.vert",
+        DEMO_ASSETS_DIR "/shaders/ssr.frag");
     const auto ssrMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = ssrShader,
         .renderState  = noDepthState,
@@ -518,9 +549,9 @@ int main() {
     tonemapMat.addTexture("uSSRTex",        ssrTex);
 
     // ── FXAA shader and material ──────────────────────────────────────────────
-    const auto fxaaVertSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/fxaa.vert");
-    const auto fxaaFragSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/fxaa.frag");
-    const auto fxaaShader   = renderer.createShader(fxaaVertSrc, fxaaFragSrc);
+    const auto fxaaShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/fxaa.vert",
+        DEMO_ASSETS_DIR "/shaders/fxaa.frag");
     const auto fxaaMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = fxaaShader,
         .renderState  = noDepthState,
@@ -530,9 +561,9 @@ int main() {
     fxaaMat.addTexture("uDepth",  gbufDepthTex); // G-buffer depth for geometric edge gating
 
     // ── SSAO shader and material ───────────────────────────────────────────────
-    const auto ssaoVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao.vert");
-    const auto ssaoFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao.frag");
-    const auto ssaoShader  = renderer.createShader(ssaoVertSrc, ssaoFragSrc);
+    const auto ssaoShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/ssao.vert",
+        DEMO_ASSETS_DIR "/shaders/ssao.frag");
     const auto ssaoMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = ssaoShader,
         .renderState  = noDepthState,
@@ -545,8 +576,9 @@ int main() {
         ssaoMat.set("uKernel[" + std::to_string(i) + "]", ssaoKernel[i]);
 
     // ── SSAO blur shader and material ─────────────────────────────────────────
-    const auto ssaoBlurFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao_blur.frag");
-    const auto ssaoBlurShader  = renderer.createShader(ssaoVertSrc, ssaoBlurFragSrc);
+    const auto ssaoBlurShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/ssao.vert",
+        DEMO_ASSETS_DIR "/shaders/ssao_blur.frag");
     const auto ssaoBlurMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = ssaoBlurShader,
         .renderState  = noDepthState,
@@ -555,8 +587,9 @@ int main() {
     ssaoBlurMat.addTexture("uSSAOTexture", ssaoTex);
 
     // ── SSAO debug: show raw AO buffer as grayscale ───────────────────────────
-    const auto ssaoShowFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssao_show.frag");
-    const auto ssaoShowShader  = renderer.createShader(ssaoVertSrc, ssaoShowFragSrc);
+    const auto ssaoShowShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/ssao.vert",
+        DEMO_ASSETS_DIR "/shaders/ssao_show.frag");
     const auto ssaoShowMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = ssaoShowShader,
         .renderState  = noDepthState,
@@ -565,11 +598,9 @@ int main() {
     ssaoShowMat.addTexture("uSSAO", ssaoBlurTex);
 
     // ── Selection outline: mask + composite materials ─────────────────────────
-    const auto outlineMaskVertSrc = sonnet::loaders::ShaderLoader::load(
-        DEMO_ASSETS_DIR "/shaders/shadow.vert");         // reuse — Position + MVP uniforms
-    const auto outlineMaskFragSrc = sonnet::loaders::ShaderLoader::load(
+    const auto outlineMaskShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/shadow.vert",          // reuse — Position + MVP uniforms
         DEMO_ASSETS_DIR "/shaders/outline_mask.frag");
-    const auto outlineMaskShader  = renderer.createShader(outlineMaskVertSrc, outlineMaskFragSrc);
     const auto outlineMaskMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = outlineMaskShader,
         .renderState  = {
@@ -581,9 +612,9 @@ int main() {
     sonnet::api::render::MaterialInstance outlineMaskMat{outlineMaskMatTmpl};
 
     // Skinned variant — uses bone matrices so animated meshes follow their pose.
-    const auto outlineMaskSkinnedVertSrc = sonnet::loaders::ShaderLoader::load(
-        DEMO_ASSETS_DIR "/shaders/outline_mask_skinned.vert");
-    const auto outlineMaskSkinnedShader  = renderer.createShader(outlineMaskSkinnedVertSrc, outlineMaskFragSrc);
+    const auto outlineMaskSkinnedShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/outline_mask_skinned.vert",
+        DEMO_ASSETS_DIR "/shaders/outline_mask.frag");
     const auto outlineMaskSkinnedMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = outlineMaskSkinnedShader,
         .renderState  = {
@@ -594,24 +625,26 @@ int main() {
     });
 
     // ── Picking materials (static + skinned) ─────────────────────────────────
-    const auto pickingFragSrc = sonnet::loaders::ShaderLoader::load(
+    const auto pickingShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/shadow.vert",
         DEMO_ASSETS_DIR "/shaders/picking.frag");
-    const auto pickingShader        = renderer.createShader(outlineMaskVertSrc, pickingFragSrc);
-    const auto pickingMatTmpl       = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+    const auto pickingMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = pickingShader,
         .renderState  = { .depthTest = true, .depthWrite = true,
                           .cull = sonnet::api::render::CullMode::Back },
     });
-    const auto pickingSkinnedShader    = renderer.createShader(outlineMaskSkinnedVertSrc, pickingFragSrc);
-    const auto pickingSkinnedMatTmpl   = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+    const auto pickingSkinnedShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/outline_mask_skinned.vert",
+        DEMO_ASSETS_DIR "/shaders/picking.frag");
+    const auto pickingSkinnedMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = pickingSkinnedShader,
         .renderState  = { .depthTest = true, .depthWrite = true,
                           .cull = sonnet::api::render::CullMode::Back },
     });
 
-    const auto outlineFragSrc  = sonnet::loaders::ShaderLoader::load(
+    const auto outlineShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/tonemap.vert",
         DEMO_ASSETS_DIR "/shaders/outline.frag");
-    const auto outlineShader   = renderer.createShader(tonemapVertSrc, outlineFragSrc);
     const auto outlineMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = outlineShader,
         .renderState  = {
@@ -627,9 +660,9 @@ int main() {
     // ── Skybox ────────────────────────────────────────────────────────────────
     // Depth testing is done in the shader: sky.frag reads gDepth and discards
     // pixels where geometry was drawn (depth < 1.0), so no FBO depth is needed.
-    const auto skyVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.vert");
-    const auto skyFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/sky.frag");
-    const auto skyShader  = renderer.createShader(skyVertSrc, skyFragSrc);
+    const auto skyShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/sky.vert",
+        DEMO_ASSETS_DIR "/shaders/sky.frag");
     const auto skyMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = skyShader,
         .renderState  = {
@@ -643,8 +676,9 @@ int main() {
     skyMat.addTexture("gDepth",  gbufDepthTex);
 
     // ── Deferred lighting shader and material ─────────────────────────────────
-    const auto deferredFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/deferred_lighting.frag");
-    const auto deferredShader  = renderer.createShader(tonemapVertSrc, deferredFragSrc);
+    const auto deferredShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/tonemap.vert",
+        DEMO_ASSETS_DIR "/shaders/deferred_lighting.frag");
     const auto deferredMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = deferredShader,
         .renderState  = noDepthState,
@@ -667,9 +701,9 @@ int main() {
     deferredMat.set("uPointShadowFarPlane", POINT_SHADOW_FAR);
 
     // ── Point-shadow depth shader and material ────────────────────────────────
-    const auto ptShadowVertSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/point_shadow.vert");
-    const auto ptShadowFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/point_shadow.frag");
-    const auto ptShadowShader  = renderer.createShader(ptShadowVertSrc, ptShadowFragSrc);
+    const auto ptShadowShader = compileShader(
+        DEMO_ASSETS_DIR "/shaders/point_shadow.vert",
+        DEMO_ASSETS_DIR "/shaders/point_shadow.frag");
     const auto ptShadowMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
         .shaderHandle = ptShadowShader,
         .renderState  = {},
@@ -741,6 +775,11 @@ int main() {
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
 
+    // ── Shader hot-reload state ───────────────────────────────────────────────
+    double       shaderPollAccum  = 0.0;          // seconds since last mtime check
+    std::string  shaderReloadMsg;                 // last reload notification
+    float        shaderReloadMsgTimer = 0.0f;     // seconds remaining to show msg
+
     // Scene hierarchy selection state.
     sonnet::world::GameObject *selectedObject = nullptr;
     glm::vec3                  editEuler{0.0f}; // Euler angles (degrees) for selected object
@@ -762,6 +801,32 @@ int main() {
         prevTime = now;
 
         window.pollEvents();
+
+        // ── Shader hot reload: poll file mtimes every 0.5 s ────────────────
+        shaderPollAccum += dt;
+        if (shaderPollAccum >= 0.5) {
+            shaderPollAccum = 0.0;
+            for (auto &rec : hotShaders) {
+                try {
+                    const auto vmt = fs::last_write_time(rec.vertPath);
+                    const auto fmt = fs::last_write_time(rec.fragPath);
+                    if (vmt == rec.vertMtime && fmt == rec.fragMtime) continue;
+                    rec.vertMtime = vmt;
+                    rec.fragMtime = fmt;
+                    const auto vert = sonnet::loaders::ShaderLoader::load(rec.vertPath);
+                    const auto frag = sonnet::loaders::ShaderLoader::load(rec.fragPath);
+                    renderer.reloadShader(rec.handle, vert, frag);
+                    const auto name = fs::path(rec.fragPath).filename().string();
+                    shaderReloadMsg   = "Reloaded: " + name;
+                    shaderReloadMsgTimer = 3.0f;
+                } catch (const std::exception &e) {
+                    const auto name = fs::path(rec.fragPath).filename().string();
+                    shaderReloadMsg   = "Error (" + name + "): " + e.what();
+                    shaderReloadMsgTimer = 6.0f;
+                }
+            }
+        }
+        shaderReloadMsgTimer -= dt;
 
         if (input.isKeyJustPressed(sonnet::api::input::Key::Escape))
             window.requestClose();
@@ -1279,6 +1344,17 @@ int main() {
             if (ImGui::BeginMenu("Window")) {
                 ImGui::TextDisabled("Drag panels to re-dock them");
                 ImGui::EndMenu();
+            }
+            // Shader hot-reload notification — shown centre-left of the menu bar.
+            if (shaderReloadMsgTimer > 0.0f && !shaderReloadMsg.empty()) {
+                const bool isErr = shaderReloadMsg.rfind("Error", 0) == 0;
+                ImGui::SetCursorPosX(200.0f);
+                if (isErr)
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.35f, 0.35f, 1.0f));
+                else
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.5f, 1.0f));
+                ImGui::TextUnformatted(shaderReloadMsg.c_str());
+                ImGui::PopStyleColor();
             }
             ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - 80.0f);
             ImGui::TextDisabled("%.0f FPS", ImGui::GetIO().Framerate);

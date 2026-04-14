@@ -104,6 +104,16 @@ GPUTextureHandle Renderer::colorTextureHandle(RenderTargetHandle handle, std::si
     return texHandle;
 }
 
+void Renderer::reloadShader(core::ShaderHandle handle,
+                             const std::string &vertSrc,
+                             const std::string &fragSrc) {
+    auto it = m_shaders.find(handle);
+    if (it == m_shaders.end()) return;
+    // Compile first — if it throws the old shader stays in place.
+    auto newShader = m_backend.shaderCompiler()(vertSrc, fragSrc);
+    it->second = std::move(newShader);
+}
+
 // ── IRenderer ──────────────────────────────────────────────────────────────────
 
 GPUTextureHandle Renderer::registerRawTexture(std::unique_ptr<ITexture> tex) {
