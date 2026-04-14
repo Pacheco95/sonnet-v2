@@ -445,6 +445,17 @@ int main() {
     const auto ssrRT  = makeBloomRT();
     const auto ssrTex = renderer.colorTextureHandle(ssrRT, 0);
 
+    // ── Outline mask render target (RGBA8, no depth — full silhouette) ────────
+    const auto outlineMaskRT = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+        .width  = fbSize0.x,
+        .height = fbSize0.y,
+        .colors = {{
+            .format      = sonnet::api::render::TextureFormat::RGBA8,
+            .samplerDesc = nearestClamp,
+        }},
+    });
+    const auto outlineMaskTex = renderer.colorTextureHandle(outlineMaskRT, 0);
+
     // Bright-pass material.
     const auto noDepthState = sonnet::api::render::RenderState{
         .depthTest  = false,
@@ -540,6 +551,50 @@ int main() {
     sonnet::api::render::MaterialInstance ssaoShowMat{ssaoShowMatTmpl};
     ssaoShowMat.addTexture("uSSAO", ssaoBlurTex);
 
+    // ── Selection outline: mask + composite materials ─────────────────────────
+    const auto outlineMaskVertSrc = sonnet::loaders::ShaderLoader::load(
+        DEMO_ASSETS_DIR "/shaders/shadow.vert");         // reuse — Position + MVP uniforms
+    const auto outlineMaskFragSrc = sonnet::loaders::ShaderLoader::load(
+        DEMO_ASSETS_DIR "/shaders/outline_mask.frag");
+    const auto outlineMaskShader  = renderer.createShader(outlineMaskVertSrc, outlineMaskFragSrc);
+    const auto outlineMaskMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = outlineMaskShader,
+        .renderState  = {
+            .depthTest  = false,  // show full silhouette regardless of occlusion
+            .depthWrite = false,
+            .cull       = sonnet::api::render::CullMode::None,
+        },
+    });
+    sonnet::api::render::MaterialInstance outlineMaskMat{outlineMaskMatTmpl};
+
+    // Skinned variant — uses bone matrices so animated meshes follow their pose.
+    const auto outlineMaskSkinnedVertSrc = sonnet::loaders::ShaderLoader::load(
+        DEMO_ASSETS_DIR "/shaders/outline_mask_skinned.vert");
+    const auto outlineMaskSkinnedShader  = renderer.createShader(outlineMaskSkinnedVertSrc, outlineMaskFragSrc);
+    const auto outlineMaskSkinnedMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = outlineMaskSkinnedShader,
+        .renderState  = {
+            .depthTest  = false,
+            .depthWrite = false,
+            .cull       = sonnet::api::render::CullMode::None,
+        },
+    });
+
+    const auto outlineFragSrc  = sonnet::loaders::ShaderLoader::load(
+        DEMO_ASSETS_DIR "/shaders/outline.frag");
+    const auto outlineShader   = renderer.createShader(tonemapVertSrc, outlineFragSrc);
+    const auto outlineMatTmpl  = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = outlineShader,
+        .renderState  = {
+            .depthTest  = false,
+            .depthWrite = false,
+            .blend      = sonnet::api::render::BlendMode::Alpha,
+            .cull       = sonnet::api::render::CullMode::None,
+        },
+    });
+    sonnet::api::render::MaterialInstance outlineMat{outlineMatTmpl};
+    outlineMat.addTexture("uMask", outlineMaskTex);
+
     // ── Skybox ────────────────────────────────────────────────────────────────
     // Depth testing is done in the shader: sky.frag reads gDepth and discards
     // pixels where geometry was drawn (depth < 1.0), so no FBO depth is needed.
@@ -616,6 +671,8 @@ int main() {
     float     ssaoBias        = 0.05f;
     bool      ssaoShow        = false; // debug: show raw AO buffer
     bool      fxaaEnabled     = true;
+    bool      outlineEnabled   = true;
+    glm::vec3 outlineColor{1.0f, 0.6f, 0.05f}; // warm orange
     bool      ssrEnabled      = true;
     int       ssrMaxSteps     = 64;
     float     ssrStepSize     = 0.1f;
@@ -1044,6 +1101,57 @@ int main() {
             renderer.beginFrame();
             renderer.render(ctx, skyQ);
             renderer.endFrame();
+        }
+
+        // ── Pass 2.15: selection outline ──────────────────────────────────────
+        if (outlineEnabled && selectedObject) {
+            // Collect the selected object and all its scene-graph descendants.
+            std::vector<sonnet::api::render::RenderItem> outlineQueue;
+            std::function<void(sonnet::world::GameObject &)> collectSubtree =
+                [&](sonnet::world::GameObject &obj) {
+                    if (obj.render) {
+                        if (obj.skin) {
+                            // Skinned mesh: use skinned mask shader and upload
+                            // the current bone palette so the outline follows
+                            // the animated pose.
+                            sonnet::api::render::MaterialInstance skinnedMaskMat{outlineMaskSkinnedMatTmpl};
+                            for (const auto &[name, val] : obj.render->material.values()) {
+                                if (name.rfind("uBoneMatrices", 0) == 0)
+                                    skinnedMaskMat.set(name, val);
+                            }
+                            outlineQueue.push_back({
+                                .mesh        = obj.render->mesh,
+                                .material    = skinnedMaskMat,
+                                .modelMatrix = obj.transform.getModelMatrix(),
+                            });
+                        } else {
+                            outlineQueue.push_back({
+                                .mesh        = obj.render->mesh,
+                                .material    = outlineMaskMat,
+                                .modelMatrix = obj.transform.getModelMatrix(),
+                            });
+                        }
+                    }
+                    for (auto *childTf : obj.transform.children()) {
+                        for (auto &o : scene.objects())
+                            if (&o->transform == childTf) { collectSubtree(*o); break; }
+                    }
+                };
+            collectSubtree(*selectedObject);
+
+            // Render subtree as solid white → outlineMaskRT.
+            renderer.bindRenderTarget(outlineMaskRT);
+            backend.setViewport(fbSize.x, fbSize.y);
+            backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+            renderer.beginFrame();
+            renderer.render(ctx, outlineQueue);
+            renderer.endFrame();
+
+            // Edge-detect the mask and alpha-blend the outline color onto hdrRT.
+            renderer.bindRenderTarget(hdrRTHandle);
+            backend.setViewport(fbSize.x, fbSize.y);
+            outlineMat.set("uOutlineColor", outlineColor);
+            fullscreenQuad(outlineMat);
         }
 
         // ── Pass 2.2: SSR → ssrRT ─────────────────────────────────────────────
@@ -1717,6 +1825,11 @@ int main() {
 
         if (ImGui::CollapsingHeader("Anti-aliasing")) {
             ImGui::Checkbox("FXAA", &fxaaEnabled);
+        }
+
+        if (ImGui::CollapsingHeader("Selection Outline")) {
+            ImGui::Checkbox   ("Enable##outline", &outlineEnabled);
+            ImGui::ColorEdit3 ("Color##outline",  &outlineColor.x);
         }
 
         if (ImGui::CollapsingHeader("Scene")) {
