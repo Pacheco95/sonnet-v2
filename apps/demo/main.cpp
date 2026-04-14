@@ -9,6 +9,7 @@
 #include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
+#include <glad/glad.h>
 #include <sonnet/scene/SceneLoader.h>
 #include <sonnet/ui/ImGuiLayer.h>
 #include <sonnet/window/GLFWInputAdapter.h>
@@ -23,6 +24,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -456,6 +458,17 @@ int main() {
     });
     const auto outlineMaskTex = renderer.colorTextureHandle(outlineMaskRT, 0);
 
+    // ── Picking render target (RGBA8 + depth for occlusion) ──────────────────
+    const auto pickingRT = renderer.createRenderTarget(sonnet::api::render::RenderTargetDesc{
+        .width  = fbSize0.x,
+        .height = fbSize0.y,
+        .colors = {{
+            .format      = sonnet::api::render::TextureFormat::RGBA8,
+            .samplerDesc = nearestClamp,
+        }},
+        .depth  = sonnet::api::render::RenderBufferDesc{},
+    });
+
     // Bright-pass material.
     const auto noDepthState = sonnet::api::render::RenderState{
         .depthTest  = false,
@@ -578,6 +591,22 @@ int main() {
             .depthWrite = false,
             .cull       = sonnet::api::render::CullMode::None,
         },
+    });
+
+    // ── Picking materials (static + skinned) ─────────────────────────────────
+    const auto pickingFragSrc = sonnet::loaders::ShaderLoader::load(
+        DEMO_ASSETS_DIR "/shaders/picking.frag");
+    const auto pickingShader        = renderer.createShader(outlineMaskVertSrc, pickingFragSrc);
+    const auto pickingMatTmpl       = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = pickingShader,
+        .renderState  = { .depthTest = true, .depthWrite = true,
+                          .cull = sonnet::api::render::CullMode::Back },
+    });
+    const auto pickingSkinnedShader    = renderer.createShader(outlineMaskSkinnedVertSrc, pickingFragSrc);
+    const auto pickingSkinnedMatTmpl   = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = pickingSkinnedShader,
+        .renderState  = { .depthTest = true, .depthWrite = true,
+                          .cull = sonnet::api::render::CullMode::Back },
     });
 
     const auto outlineFragSrc  = sonnet::loaders::ShaderLoader::load(
@@ -1329,22 +1358,11 @@ int main() {
             }
 
             // ── Object picking (LMB click, not over gizmo) ────────────────────
+            // GPU object-ID picking: render every mesh as a flat color encoding
+            // its 1-based index into an RGBA8 RT, then glReadPixels at the click.
             const bool lmbClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
             if (lmbClicked && gizmoActiveAxis == 0) {
                 const ImVec2 mp = ImGui::GetMousePos();
-                const glm::vec2 uv{(mp.x - vpMin.x) / vpSize.x,
-                                   (mp.y - vpMin.y) / vpSize.y};
-
-                // Unproject click to a world-space ray.
-                const glm::vec4 ndcNear{uv.x*2.f-1.f, (1.f-uv.y)*2.f-1.f, -1.f, 1.f};
-                const glm::vec4 ndcFar {ndcNear.x,     ndcNear.y,           1.f,  1.f};
-                const glm::mat4 invVP = glm::inverse(projMat * viewMat);
-                auto unproj = [&](glm::vec4 ndc) {
-                    glm::vec4 w = invVP * ndc;
-                    return glm::vec3(w) / w.w;
-                };
-                const glm::vec3 rayOrig = camPos;
-                const glm::vec3 rayDir  = glm::normalize(unproj(ndcFar) - unproj(ndcNear));
 
                 // Helper: walk up hierarchy to find a selectable (no '/' in name) ancestor.
                 auto selectableAncestor = [&](sonnet::world::GameObject *obj)
@@ -1352,7 +1370,6 @@ int main() {
                     while (obj && obj->name.find('/') != std::string::npos) {
                         auto *p = obj->transform.getParent();
                         if (!p) break;
-                        // Find the GameObject that owns this transform.
                         obj = nullptr;
                         for (auto &o : scene.objects())
                             if (&o->transform == p) { obj = o.get(); break; }
@@ -1360,31 +1377,59 @@ int main() {
                     return obj;
                 };
 
-                // Ray–sphere test; pick the closest hit.
-                float bestT = std::numeric_limits<float>::max();
-                sonnet::world::GameObject *bestObj = nullptr;
-                for (auto &o : scene.objects()) {
+                // Build per-object color-encoded render queue.
+                std::vector<sonnet::api::render::RenderItem> pickQueue;
+                std::vector<sonnet::world::GameObject *>     pickObjects;
+                for (const auto &o : scene.objects()) {
                     if (!o->render) continue;
-                    const glm::vec3 center = o->transform.getWorldPosition();
-                    const float     radius = glm::length(o->transform.getLocalScale()) * 0.6f;
-
-                    // Analytic ray-sphere intersection.
-                    const glm::vec3 oc = rayOrig - center;
-                    const float     b  = glm::dot(oc, rayDir);
-                    const float     c  = glm::dot(oc, oc) - radius * radius;
-                    const float  disc  = b * b - c;
-                    if (disc < 0.0f) continue;
-                    const float t = -b - std::sqrt(disc);
-                    if (t > 0.0f && t < bestT) { bestT = t; bestObj = o.get(); }
+                    const int id = static_cast<int>(pickObjects.size()) + 1;
+                    const glm::vec3 col{
+                        float(id & 0xFF)         / 255.0f,
+                        float((id >> 8)  & 0xFF) / 255.0f,
+                        float((id >> 16) & 0xFF) / 255.0f,
+                    };
+                    if (o->skin) {
+                        sonnet::api::render::MaterialInstance mat{pickingSkinnedMatTmpl};
+                        mat.set("uPickColor", col);
+                        for (const auto &[name, val] : o->render->material.values())
+                            if (name.rfind("uBoneMatrices", 0) == 0)
+                                mat.set(name, val);
+                        pickQueue.push_back({.mesh = o->render->mesh, .material = mat,
+                                             .modelMatrix = o->transform.getModelMatrix()});
+                    } else {
+                        sonnet::api::render::MaterialInstance mat{pickingMatTmpl};
+                        mat.set("uPickColor", col);
+                        pickQueue.push_back({.mesh = o->render->mesh, .material = mat,
+                                             .modelMatrix = o->transform.getModelMatrix()});
+                    }
+                    pickObjects.push_back(o.get());
                 }
 
-                if (bestObj) {
-                    auto *sel = selectableAncestor(bestObj);
-                    selectedObject = sel ? sel : bestObj;
+                // Render picking pass → pickingRT.
+                renderer.bindRenderTarget(pickingRT);
+                backend.setViewport(fbSize.x, fbSize.y);
+                backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}}, .depth = 1.0f });
+                renderer.beginFrame();
+                renderer.render(ctx, pickQueue);
+                renderer.endFrame();
+
+                // Read the pixel under the cursor.
+                // ImGui coords are top-left origin; OpenGL is bottom-left — flip Y.
+                const int px = static_cast<int>((mp.x - vpMin.x) / vpSize.x * fbSize.x);
+                const int py = fbSize.y - 1
+                             - static_cast<int>((mp.y - vpMin.y) / vpSize.y * fbSize.y);
+                std::array<std::uint8_t, 4> pixel{};
+                glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+
+                const int hitId = int(pixel[0])
+                                | (int(pixel[1]) << 8)
+                                | (int(pixel[2]) << 16);
+                if (hitId > 0 && hitId <= static_cast<int>(pickObjects.size())) {
+                    auto *sel = selectableAncestor(pickObjects[hitId - 1]);
+                    selectedObject = sel ? sel : pickObjects[hitId - 1];
                     editEuler = glm::degrees(glm::eulerAngles(
                         selectedObject->transform.getLocalRotation()));
                 } else {
-                    // Click on empty space — deselect.
                     selectedObject = nullptr;
                 }
             }
