@@ -27,7 +27,9 @@
             "cube":    "cube.obj",
             "floor":   { "primitive": "box",    "size": [6.0, 0.1, 6.0] },
             "sphere":  { "primitive": "sphere", "segmentsX": 24, "segmentsY": 12 },
-            "helmet":  { "model": "models/DamagedHelmet.glb", "material": "lit" }
+            "helmet":  { "model": "models/DamagedHelmet.glb", "material": "lit" },
+            "fox":          { "model": "models/Fox.glb",           "material": "lit" },
+            "animatedCube": { "model": "models/AnimatedCube.glb",  "material": "lit" }
         },
         "textures": {
             "metalAlbedo": "metal034_albedo.jpg",
@@ -85,6 +87,18 @@
             "name":     "Helmet",
             "position": [-2.5, 0.5, 0.0],
             "render":   { "mesh": "helmet" }
+        },
+        {
+            "name":     "Fox",
+            "position": [2.0, -0.75, 0.0],
+            "scale":    [0.01, 0.01, 0.01],
+            "render":   { "mesh": "fox" }
+        },
+        {
+            "name":     "AnimCubeObj",
+            "position": [0.0, 0.5, 2.0],
+            "scale":    [0.3, 0.3, 0.3],
+            "render":   { "mesh": "animatedCube" }
         }
     ]
 }

@@ -2,6 +2,7 @@
 
 #include <sonnet/api/render/Material.h>
 #include <sonnet/loaders/ModelLoader.h>
+#include <sonnet/world/AnimationPlayer.h>
 #include <sonnet/loaders/ShaderLoader.h>
 #include <sonnet/loaders/TextureLoader.h>
 #include <sonnet/primitives/MeshPrimitives.h>
@@ -151,10 +152,10 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
     std::unordered_map<std::string, core::MaterialTemplateHandle>    materials;
 
     // Model entries: "meshName": { "model": "path.glb", "material": "lit" }
-    // Each model holds multiple sub-meshes and their decoded PBR materials.
+    // Each model holds multiple sub-meshes, PBR materials, and animation clips.
     struct ModelEntry {
-        std::vector<loaders::LoadedMesh> loadedMeshes;
-        std::string                      materialName; // scene material template to use
+        loaders::LoadedModel loadedModel;
+        std::string          materialName; // scene material template to use
     };
     std::unordered_map<std::string, ModelEntry> modelEntries;
 
@@ -204,6 +205,7 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                         loaders::ModelLoader::loadAll(modelPath),
                         matName,
                     };
+
                 } else {
                     meshes[name] = loadMesh(spec, assetsDir, *renderer);
                 }
@@ -271,8 +273,8 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                     throw std::runtime_error("SceneLoader: model material '" +
                                              entry.materialName + "' not found");
 
-                for (std::size_t i = 0; i < entry.loadedMeshes.size(); ++i) {
-                    const auto &lm = entry.loadedMeshes[i];
+                for (std::size_t i = 0; i < entry.loadedModel.meshes.size(); ++i) {
+                    const auto &lm = entry.loadedModel.meshes[i];
                     const std::string childName =
                         name + "/" + (lm.name.empty() ? std::to_string(i) : lm.name);
 
@@ -327,6 +329,26 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                         .mesh     = gpuMesh,
                         .material = std::move(childMat),
                     };
+                }
+
+                // ── Animation player ───────────────────────────────────────────
+                // If the model has embedded animation clips, attach an AnimationPlayer
+                // to the parent object and map child node names to their transforms.
+                if (!entry.loadedModel.animations.empty()) {
+                    world::AnimationPlayer player;
+                    player.clips = entry.loadedModel.animations;
+                    // Map the parent itself (root node may be animated directly).
+                    player.addTarget(name, &obj.transform);
+                    // Map each child by its short node name (after "parentName/").
+                    const std::string prefix = name + "/";
+                    for (auto &[childName, childObj] : result.objects) {
+                        if (childName.size() > prefix.size() &&
+                            childName.substr(0, prefix.size()) == prefix) {
+                            const std::string nodeName = childName.substr(prefix.size());
+                            player.addTarget(nodeName, &childObj->transform);
+                        }
+                    }
+                    obj.animationPlayer = std::move(player);
                 }
 
             // ── Single mesh ────────────────────────────────────────────────────

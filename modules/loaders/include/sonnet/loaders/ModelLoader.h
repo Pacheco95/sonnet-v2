@@ -6,9 +6,11 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace sonnet::loaders {
 
@@ -45,6 +47,29 @@ struct LoadedMesh {
     std::string          name;
 };
 
+// One keyframe channel for a single node in an animation clip.
+// Keyframe times are in seconds; values are interpolated linearly (positions/scales)
+// or spherically (rotations) between the two surrounding keyframes.
+struct AnimationChannel {
+    std::string                              nodeName;
+    std::vector<std::pair<float, glm::vec3>> positions; // (time_s, translation)
+    std::vector<std::pair<float, glm::quat>> rotations; // (time_s, quaternion)
+    std::vector<std::pair<float, glm::vec3>> scales;    // (time_s, scale)
+};
+
+// A single named animation clip extracted from a glTF/GLB file.
+struct AnimationClip {
+    std::string                   name;
+    float                         duration; // seconds
+    std::vector<AnimationChannel> channels;
+};
+
+// Return type of loadAll(): meshes plus any embedded animation clips.
+struct LoadedModel {
+    std::vector<LoadedMesh>    meshes;
+    std::vector<AnimationClip> animations;
+};
+
 class ModelLoader {
 public:
     // Load all meshes from a file. Each Assimp mesh becomes one CPUMesh.
@@ -53,10 +78,10 @@ public:
     [[nodiscard]] static std::vector<api::render::CPUMesh> load(
         const std::filesystem::path &path);
 
-    // Load all meshes and their PBR materials. Intended for glTF/GLB files.
-    // Embedded textures (GLB) are decoded eagerly; external textures store their paths.
+    // Load all meshes, PBR materials, and animation clips from a file.
+    // Intended for glTF/GLB. Embedded textures are decoded eagerly.
     // UV coordinates are flipped (aiProcess_FlipUVs) to match OpenGL bottom-left convention.
-    [[nodiscard]] static std::vector<LoadedMesh> loadAll(
+    [[nodiscard]] static LoadedModel loadAll(
         const std::filesystem::path &path);
 };
 

@@ -12,6 +12,7 @@
 #include <stb_image.h>
 
 #include <cstring>
+#include <functional>
 #include <stdexcept>
 
 namespace sonnet::loaders {
@@ -212,7 +213,7 @@ static MeshMaterial extractMaterial(const aiScene *scene,
 
 } // anonymous namespace
 
-std::vector<LoadedMesh> ModelLoader::loadAll(const std::filesystem::path &path) {
+LoadedModel ModelLoader::loadAll(const std::filesystem::path &path) {
     Assimp::Importer importer;
     const aiScene *scene = importer.ReadFile(
         path.string(),
@@ -229,20 +230,72 @@ std::vector<LoadedMesh> ModelLoader::loadAll(const std::filesystem::path &path) 
 
     const auto modelDir = path.parent_path();
 
-    std::vector<LoadedMesh> result;
-    result.reserve(scene->mNumMeshes);
-    for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
-        const aiMesh *mesh = scene->mMeshes[i];
-        auto cpuMesh = convertMesh(mesh);
-        MeshMaterial mat;
-        if (mesh->mMaterialIndex < scene->mNumMaterials)
-            mat = extractMaterial(scene, scene->mMaterials[mesh->mMaterialIndex], modelDir);
-        result.push_back(LoadedMesh{
-            std::move(cpuMesh),
-            std::move(mat),
-            std::string{mesh->mName.C_Str()},
-        });
+    // Traverse the node tree to collect meshes in hierarchy order, naming each
+    // LoadedMesh by its *node* name (not mesh name) so animation channel names
+    // (which reference node names) align with the child GameObjects in SceneLoader.
+    LoadedModel result;
+    result.meshes.reserve(scene->mNumMeshes);
+
+    std::function<void(const aiNode *)> visitNode = [&](const aiNode *node) {
+        const std::string nodeName{node->mName.C_Str()};
+        for (unsigned mi = 0; mi < node->mNumMeshes; ++mi) {
+            const aiMesh *mesh = scene->mMeshes[node->mMeshes[mi]];
+            auto cpuMesh = convertMesh(mesh);
+            MeshMaterial mat;
+            if (mesh->mMaterialIndex < scene->mNumMaterials)
+                mat = extractMaterial(scene, scene->mMaterials[mesh->mMaterialIndex], modelDir);
+            // Name by node; append index suffix when a node owns multiple meshes.
+            const std::string name = (node->mNumMeshes == 1)
+                ? nodeName
+                : nodeName + "_" + std::to_string(mi);
+            result.meshes.push_back(LoadedMesh{std::move(cpuMesh), std::move(mat), name});
+        }
+        for (unsigned ci = 0; ci < node->mNumChildren; ++ci)
+            visitNode(node->mChildren[ci]);
+    };
+    visitNode(scene->mRootNode);
+
+    // ── Animation clips ───────────────────────────────────────────────────────
+    for (unsigned a = 0; a < scene->mNumAnimations; ++a) {
+        const aiAnimation *anim = scene->mAnimations[a];
+        const double tps = anim->mTicksPerSecond > 0.0 ? anim->mTicksPerSecond : 25.0;
+
+        AnimationClip clip;
+        clip.name     = anim->mName.C_Str();
+        clip.duration = static_cast<float>(anim->mDuration / tps);
+
+        for (unsigned c = 0; c < anim->mNumChannels; ++c) {
+            const aiNodeAnim *ch = anim->mChannels[c];
+            AnimationChannel channel;
+            channel.nodeName = ch->mNodeName.C_Str();
+
+            for (unsigned k = 0; k < ch->mNumPositionKeys; ++k) {
+                const auto &key = ch->mPositionKeys[k];
+                channel.positions.push_back({
+                    static_cast<float>(key.mTime / tps),
+                    {key.mValue.x, key.mValue.y, key.mValue.z},
+                });
+            }
+            for (unsigned k = 0; k < ch->mNumRotationKeys; ++k) {
+                const auto &key = ch->mRotationKeys[k];
+                // aiQuaternion is (w,x,y,z); glm::quat constructor is (w,x,y,z)
+                channel.rotations.push_back({
+                    static_cast<float>(key.mTime / tps),
+                    glm::quat{key.mValue.w, key.mValue.x, key.mValue.y, key.mValue.z},
+                });
+            }
+            for (unsigned k = 0; k < ch->mNumScalingKeys; ++k) {
+                const auto &key = ch->mScalingKeys[k];
+                channel.scales.push_back({
+                    static_cast<float>(key.mTime / tps),
+                    {key.mValue.x, key.mValue.y, key.mValue.z},
+                });
+            }
+            clip.channels.push_back(std::move(channel));
+        }
+        result.animations.push_back(std::move(clip));
     }
+
     return result;
 }
 

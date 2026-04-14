@@ -2,6 +2,7 @@
 
 #include <sonnet/api/render/Material.h>
 #include <sonnet/core/Types.h>
+#include <sonnet/world/AnimationPlayer.h>
 #include <sonnet/world/CameraComponent.h>
 #include <sonnet/world/Transform.h>
 
@@ -19,10 +20,11 @@ class GameObject {
 public:
     explicit GameObject(std::string name) : name(std::move(name)) {}
 
-    std::string                    name;
-    Transform                      transform;
-    std::optional<RenderComponent> render;
-    std::optional<CameraComponent> camera;
+    std::string                       name;
+    Transform                         transform;
+    std::optional<RenderComponent>    render;
+    std::optional<CameraComponent>    camera;
+    std::optional<AnimationPlayer>    animationPlayer;
 };
 
 } // namespace sonnet::world

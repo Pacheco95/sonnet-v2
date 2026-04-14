@@ -582,6 +582,12 @@ int main() {
         cube.transform.setLocalRotation(
             glm::angleAxis(glm::radians(rotation * 0.5f), glm::vec3{1, 0, 0}));
 
+        // ── Animation players ─────────────────────────────────────────────────
+        for (const auto &obj : scene.objects()) {
+            if (obj->animationPlayer)
+                obj->animationPlayer->update(dt);
+        }
+
         // ── Camera matrices (needed for CSM frustum extraction) ──────────────
         const float aspect = fbSize.x > 0 && fbSize.y > 0
             ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)
@@ -1066,6 +1072,44 @@ int main() {
                 const glm::vec3 p = cameraObj.transform.getWorldPosition();
                 ImGui::Text("Position  %.2f  %.2f  %.2f", p.x, p.y, p.z);
                 ImGui::Text("%.1f FPS", ImGui::GetIO().Framerate);
+            }
+
+            // ── Animation controls ─────────────────────────────────────────────
+            for (const auto &obj : scene.objects()) {
+                if (!obj->animationPlayer) continue;
+                auto &ap = *obj->animationPlayer;
+                if (ap.clips.empty()) continue;
+                const std::string header = "Animation: " + obj->name;
+                if (ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::PushID(obj->name.c_str());
+                    // Clip selector
+                    if (ap.clips.size() > 1) {
+                        if (ImGui::BeginCombo("Clip", ap.clips[ap.currentClip].name.c_str())) {
+                            for (int c = 0; c < static_cast<int>(ap.clips.size()); ++c) {
+                                const bool sel = (c == ap.currentClip);
+                                if (ImGui::Selectable(ap.clips[c].name.c_str(), sel)) {
+                                    ap.currentClip = c;
+                                    ap.time        = 0.0f;
+                                    ap.playing     = true;
+                                }
+                                if (sel) ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                    } else {
+                        ImGui::TextDisabled("Clip: %s", ap.clips[0].name.c_str());
+                    }
+                    // Play / pause
+                    if (ImGui::Button(ap.playing ? "Pause" : "Play")) ap.playing = !ap.playing;
+                    ImGui::SameLine();
+                    if (ImGui::Button("Restart")) { ap.time = 0.0f; ap.playing = true; }
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Loop", &ap.loop);
+                    // Time scrubber
+                    const float dur = ap.clips[ap.currentClip].duration;
+                    ImGui::SliderFloat("Time", &ap.time, 0.0f, dur > 0.0f ? dur : 1.0f, "%.2f s");
+                    ImGui::PopID();
+                }
             }
 
             ImGui::End();
