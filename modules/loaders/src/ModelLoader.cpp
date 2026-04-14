@@ -32,7 +32,31 @@ static VertexLayout pntbtLayout() {
     return VertexLayout{attrs};
 }
 
-static CPUMesh convertMesh(const aiMesh *mesh) {
+static VertexLayout pntbtSkinnedLayout() {
+    KnownAttributeSet attrs;
+    attrs.insert(PositionAttribute{});
+    attrs.insert(TexCoordAttribute{});
+    attrs.insert(NormalAttribute{});
+    attrs.insert(TangentAttribute{});
+    attrs.insert(BiTangentAttribute{});
+    attrs.insert(BoneIndexAttribute{});
+    attrs.insert(BoneWeightAttribute{});
+    return VertexLayout{attrs};
+}
+
+// Convert aiMatrix4x4 (row-major) to glm::mat4 (column-major).
+static glm::mat4 aiToGLM(const aiMatrix4x4 &m) {
+    return glm::mat4{
+        m.a1, m.b1, m.c1, m.d1,
+        m.a2, m.b2, m.c2, m.d2,
+        m.a3, m.b3, m.c3, m.d3,
+        m.a4, m.b4, m.c4, m.d4,
+    };
+}
+
+static CPUMesh convertMesh(const aiMesh *mesh,
+                            const std::vector<glm::ivec4> *boneIndices = nullptr,
+                            const std::vector<glm::vec4>  *boneWeights = nullptr) {
     std::vector<CPUMesh::Index> indices;
     indices.reserve(static_cast<std::size_t>(mesh->mNumFaces) * 3);
     for (unsigned f = 0; f < mesh->mNumFaces; ++f) {
@@ -42,7 +66,10 @@ static CPUMesh convertMesh(const aiMesh *mesh) {
         }
     }
 
-    CPUMesh cpuMesh{pntbtLayout(), std::move(indices), mesh->mNumVertices};
+    const bool skinned = (boneIndices != nullptr);
+    CPUMesh cpuMesh{skinned ? pntbtSkinnedLayout() : pntbtLayout(),
+                    std::move(indices), mesh->mNumVertices};
+
     for (unsigned v = 0; v < mesh->mNumVertices; ++v) {
         const aiVector3D &p = mesh->mVertices[v];
         const aiVector3D &n = mesh->mNormals[v];
@@ -65,9 +92,54 @@ static CPUMesh convertMesh(const aiMesh *mesh) {
         attrs.insert(NormalAttribute{glm::vec3{n.x, n.y, n.z}});
         attrs.insert(TangentAttribute{tangent});
         attrs.insert(BiTangentAttribute{bitangent});
+        if (skinned) {
+            attrs.insert(BoneIndexAttribute{(*boneIndices)[v]});
+            attrs.insert(BoneWeightAttribute{(*boneWeights)[v]});
+        }
         cpuMesh.addVertex(attrs);
     }
     return cpuMesh;
+}
+
+// Build per-vertex bone index/weight arrays from Assimp bone data.
+// Returns false if the mesh has no bones.
+static bool extractBoneData(const aiMesh *mesh,
+                             std::vector<glm::ivec4> &outIndices,
+                             std::vector<glm::vec4>  &outWeights,
+                             std::vector<BoneInfo>   &outBones) {
+    if (!mesh->HasBones()) return false;
+
+    const unsigned numVerts = mesh->mNumVertices;
+    outIndices.assign(numVerts, glm::ivec4{0});
+    outWeights.assign(numVerts, glm::vec4{0.0f});
+    std::vector<int> influence(numVerts, 0); // how many weights assigned so far
+
+    outBones.reserve(mesh->mNumBones);
+    for (unsigned bi = 0; bi < mesh->mNumBones; ++bi) {
+        const aiBone *bone = mesh->mBones[bi];
+        outBones.push_back(BoneInfo{
+            bone->mName.C_Str(),
+            aiToGLM(bone->mOffsetMatrix),
+        });
+        for (unsigned wi = 0; wi < bone->mNumWeights; ++wi) {
+            const unsigned vid    = bone->mWeights[wi].mVertexId;
+            const float    weight = bone->mWeights[wi].mWeight;
+            const int      slot   = influence[vid];
+            if (slot >= 4) continue; // only keep top 4 influences
+            outIndices[vid][slot] = static_cast<int>(bi);
+            outWeights[vid][slot] = weight;
+            ++influence[vid];
+        }
+    }
+
+    // Normalize weights so they sum to 1.
+    for (unsigned v = 0; v < numVerts; ++v) {
+        const float sum = outWeights[v].x + outWeights[v].y +
+                          outWeights[v].z + outWeights[v].w;
+        if (sum > 0.0f)
+            outWeights[v] /= sum;
+    }
+    return true;
 }
 
 // ── ModelLoader::load ──────────────────────────────────────────────────────────
@@ -264,7 +336,18 @@ LoadedModel ModelLoader::loadAll(const std::filesystem::path &path) {
                 auto it = aiMeshToLoaded.find(aiIdx);
                 if (it == aiMeshToLoaded.end()) {
                     const aiMesh *mesh = scene->mMeshes[aiIdx];
-                    auto cpuMesh = convertMesh(mesh);
+
+                    // Extract bone data first (if any) so the mesh gets the
+                    // correct vertex layout (PNTBT vs PNTBT+skin).
+                    std::vector<glm::ivec4> boneIdx;
+                    std::vector<glm::vec4>  boneWgt;
+                    std::vector<BoneInfo>   bones;
+                    const bool hasSkin = extractBoneData(mesh, boneIdx, boneWgt, bones);
+
+                    auto cpuMesh = hasSkin
+                        ? convertMesh(mesh, &boneIdx, &boneWgt)
+                        : convertMesh(mesh);
+
                     MeshMaterial mat;
                     if (mesh->mMaterialIndex < scene->mNumMaterials)
                         mat = extractMaterial(scene,
@@ -272,8 +355,11 @@ LoadedModel ModelLoader::loadAll(const std::filesystem::path &path) {
                                               modelDir);
                     const int loadedIdx = static_cast<int>(result.meshes.size());
                     result.meshes.push_back(LoadedMesh{
-                        std::move(cpuMesh), std::move(mat),
+                        std::move(cpuMesh),
+                        std::move(mat),
                         std::string{node->mName.C_Str()},
+                        hasSkin,
+                        std::move(bones),
                     });
                     aiMeshToLoaded[aiIdx] = loadedIdx;
                     it = aiMeshToLoaded.find(aiIdx);

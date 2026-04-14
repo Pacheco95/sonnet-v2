@@ -588,6 +588,20 @@ int main() {
                 obj->animationPlayer->update(dt);
         }
 
+        // ── Skinning bone palette upload ───────────────────────────────────────
+        // Must run after animation players so bone transforms are current.
+        for (const auto &obj : scene.objects()) {
+            if (!obj->skin || !obj->render) continue;
+            const auto &skin = *obj->skin;
+            for (int bi = 0; bi < skin.numBones; ++bi) {
+                if (!skin.boneTransforms[bi]) continue;
+                const glm::mat4 boneMatrix =
+                    skin.boneTransforms[bi]->getModelMatrix() * skin.inverseBindMatrices[bi];
+                obj->render->material.set(
+                    "uBoneMatrices[" + std::to_string(bi) + "]", boneMatrix);
+            }
+        }
+
         // ── Camera matrices (needed for CSM frustum extraction) ──────────────
         const float aspect = fbSize.x > 0 && fbSize.y > 0
             ? static_cast<float>(fbSize.x) / static_cast<float>(fbSize.y)

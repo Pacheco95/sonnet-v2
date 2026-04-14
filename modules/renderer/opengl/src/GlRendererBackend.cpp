@@ -149,13 +149,22 @@ void GlRendererBackend::setupVertexAttributes(const api::render::VertexLayout &l
         std::visit([&](const auto &a) {
             using A = std::decay_t<decltype(a)>;
             glEnableVertexAttribArray(A::location);
-            glVertexAttribPointer(
-                A::location,
-                static_cast<GLint>(A::componentCount),
-                GL_FLOAT,
-                a.normalize ? GL_TRUE : GL_FALSE,
-                static_cast<GLsizei>(stride),
-                reinterpret_cast<const void *>(offset));
+            if constexpr (std::is_same_v<typename A::ComponentType, int>) {
+                glVertexAttribIPointer(
+                    A::location,
+                    static_cast<GLint>(A::componentCount),
+                    GL_INT,
+                    static_cast<GLsizei>(stride),
+                    reinterpret_cast<const void *>(offset));
+            } else {
+                glVertexAttribPointer(
+                    A::location,
+                    static_cast<GLint>(A::componentCount),
+                    GL_FLOAT,
+                    a.normalize ? GL_TRUE : GL_FALSE,
+                    static_cast<GLsizei>(stride),
+                    reinterpret_cast<const void *>(offset));
+            }
             offset += A::sizeInBytes;
         }, attr);
     }

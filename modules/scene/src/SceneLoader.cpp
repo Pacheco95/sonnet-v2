@@ -3,6 +3,7 @@
 #include <sonnet/api/render/Material.h>
 #include <sonnet/loaders/ModelLoader.h>
 #include <sonnet/world/AnimationPlayer.h>
+#include <sonnet/world/SkinComponent.h>
 #include <sonnet/loaders/ShaderLoader.h>
 #include <sonnet/loaders/TextureLoader.h>
 #include <sonnet/primitives/MeshPrimitives.h>
@@ -269,10 +270,21 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
             // ── Model (multi-mesh glTF) ────────────────────────────────────────
             if (auto modelIt = modelEntries.find(meshName); modelIt != modelEntries.end()) {
                 const auto &entry = modelIt->second;
-                auto matTmplIt    = materials.find(entry.materialName);
-                if (matTmplIt == materials.end())
-                    throw std::runtime_error("SceneLoader: model material '" +
-                                             entry.materialName + "' not found");
+
+                // Helper: resolve the right material template for a mesh.
+                // Skinned meshes prefer "skinned_<base>" if available.
+                auto resolveMat = [&](bool hasSkin) -> core::MaterialTemplateHandle {
+                    if (hasSkin) {
+                        const std::string skinnedName = "skinned_" + entry.materialName;
+                        if (auto it = materials.find(skinnedName); it != materials.end())
+                            return it->second;
+                    }
+                    auto it = materials.find(entry.materialName);
+                    if (it == materials.end())
+                        throw std::runtime_error("SceneLoader: model material '" +
+                                                 entry.materialName + "' not found");
+                    return it->second;
+                };
 
                 // Helper: upload a MeshTexture to the GPU.
                 auto uploadTex = [&](const loaders::MeshTexture &tex) -> core::GPUTextureHandle {
@@ -292,6 +304,10 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                                     .format = fmt, .colorSpace = cs},
                         {}, cpuTex);
                 };
+
+                // Pending skin wiring: mesh node → bone names to look up after
+                // all GameObjects have been created.
+                std::vector<std::pair<world::GameObject*, std::vector<std::string>>> pendingSkins;
 
                 // Recursively create one GameObject per node in the loaded hierarchy.
                 // Empty (mesh-less) nodes are created so animation channels that target
@@ -315,7 +331,7 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                         if (!node.meshIndices.empty()) {
                             const auto &lm = entry.loadedModel.meshes[node.meshIndices[0]];
                             auto gpuMesh = renderer->createMesh(lm.mesh);
-                            MaterialInstance childMat{matTmplIt->second};
+                            MaterialInstance childMat{resolveMat(lm.hasSkin)};
 
                             if (lm.material.albedo.valid())
                                 childMat.addTexture("uAlbedo",    uploadTex(lm.material.albedo));
@@ -343,12 +359,39 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                                 .mesh     = gpuMesh,
                                 .material = std::move(childMat),
                             };
+
+                            // For skinned meshes, prepare a SkinComponent.
+                            // Bone transform pointers are wired up after all nodes exist.
+                            if (lm.hasSkin) {
+                                world::SkinComponent skinComp;
+                                skinComp.numBones = static_cast<int>(lm.bones.size());
+                                skinComp.inverseBindMatrices.reserve(lm.bones.size());
+                                skinComp.boneTransforms.resize(lm.bones.size(), nullptr);
+                                std::vector<std::string> boneNodeNames;
+                                boneNodeNames.reserve(lm.bones.size());
+                                for (const auto &b : lm.bones) {
+                                    skinComp.inverseBindMatrices.push_back(b.inverseBindMatrix);
+                                    boneNodeNames.push_back(name + "/" + b.name);
+                                }
+                                child.skin = std::move(skinComp);
+                                pendingSkins.emplace_back(&child, std::move(boneNodeNames));
+                            }
                         }
 
                         for (int ci : node.children)
                             createNodes(ci, &child);
                     };
                 createNodes(entry.loadedModel.rootNode, &obj);
+
+                // Wire up bone Transform pointers now that all nodes exist.
+                for (auto &[meshObj, boneNames] : pendingSkins) {
+                    auto &skinComp = *meshObj->skin;
+                    for (int bi = 0; bi < skinComp.numBones; ++bi) {
+                        if (auto it = result.objects.find(boneNames[bi]);
+                            it != result.objects.end())
+                            skinComp.boneTransforms[bi] = &it->second->transform;
+                    }
+                }
 
                 // ── Animation player ───────────────────────────────────────────
                 // All nodes now have corresponding GameObjects; map every child by

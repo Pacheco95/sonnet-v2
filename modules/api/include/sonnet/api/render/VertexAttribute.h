@@ -58,6 +58,8 @@ using TexCoordAttribute  = VertexAttribute<"TexCoord",  2, glm::vec2>;
 using NormalAttribute    = VertexAttribute<"Normal",    3, glm::vec3>;
 using TangentAttribute   = VertexAttribute<"Tangent",   4, glm::vec3>;
 using BiTangentAttribute = VertexAttribute<"BiTangent", 5, glm::vec3>;
+using BoneIndexAttribute = VertexAttribute<"BoneIndex", 6, glm::ivec4>;
+using BoneWeightAttribute= VertexAttribute<"BoneWeight",7, glm::vec4>;
 
 template <typename T>
 concept Attribute =
@@ -66,7 +68,9 @@ concept Attribute =
     std::same_as<T, TexCoordAttribute>   ||
     std::same_as<T, NormalAttribute>     ||
     std::same_as<T, TangentAttribute>    ||
-    std::same_as<T, BiTangentAttribute>;
+    std::same_as<T, BiTangentAttribute>  ||
+    std::same_as<T, BoneIndexAttribute>  ||
+    std::same_as<T, BoneWeightAttribute>;
 
 inline constexpr auto Position  = PositionAttribute{};
 inline constexpr auto Color     = ColorAttribute{};
@@ -81,7 +85,9 @@ using KnownAttribute = std::variant<
     TexCoordAttribute,
     NormalAttribute,
     TangentAttribute,
-    BiTangentAttribute
+    BiTangentAttribute,
+    BoneIndexAttribute,
+    BoneWeightAttribute
 >;
 // clang-format on
 

@@ -40,11 +40,21 @@ struct MeshMaterial {
     std::string name;
 };
 
+// One bone extracted from a skinned mesh.
+struct BoneInfo {
+    std::string name;              // node name (matches a LoadedNode)
+    glm::mat4   inverseBindMatrix; // mesh-space to bone-space transform
+};
+
 // One mesh + its associated PBR material, as returned by loadAll().
 struct LoadedMesh {
     api::render::CPUMesh mesh;
     MeshMaterial         material;
     std::string          name;
+
+    // Skin data — non-empty when the mesh is skinned (hasSkin == true).
+    bool                  hasSkin = false;
+    std::vector<BoneInfo> bones;   // bone index → name + inverse bind matrix
 };
 
 // One keyframe channel for a single node in an animation clip.

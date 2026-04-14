@@ -1,12 +1,23 @@
 {
     "assets": {
         "shaders": {
-            "lit":      { "vert": "shaders/gbuffer.vert",          "frag": "shaders/gbuffer.frag"          },
-            "emissive": { "vert": "shaders/emissive.vert",         "frag": "shaders/gbuffer_emissive.frag" }
+            "lit":         { "vert": "shaders/gbuffer.vert",         "frag": "shaders/gbuffer.frag"          },
+            "skinned_lit": { "vert": "shaders/gbuffer_skinned.vert", "frag": "shaders/gbuffer.frag"          },
+            "emissive":    { "vert": "shaders/emissive.vert",        "frag": "shaders/gbuffer_emissive.frag" }
         },
         "materials": {
             "lit": {
                 "shader": "lit",
+                "defaultValues": {
+                    "uShadowBias":     0.005,
+                    "uMetallic":       1.0,
+                    "uRoughness":      1.0,
+                    "uEmissiveFactor": [0.0, 0.0, 0.0],
+                    "uAlphaCutoff":    0.0
+                }
+            },
+            "skinned_lit": {
+                "shader": "skinned_lit",
                 "defaultValues": {
                     "uShadowBias":     0.005,
                     "uMetallic":       1.0,

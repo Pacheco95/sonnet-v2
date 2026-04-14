@@ -4,6 +4,7 @@
 #include <sonnet/core/Types.h>
 #include <sonnet/world/AnimationPlayer.h>
 #include <sonnet/world/CameraComponent.h>
+#include <sonnet/world/SkinComponent.h>
 #include <sonnet/world/Transform.h>
 
 #include <optional>
@@ -25,6 +26,7 @@ public:
     std::optional<RenderComponent>    render;
     std::optional<CameraComponent>    camera;
     std::optional<AnimationPlayer>    animationPlayer;
+    std::optional<SkinComponent>      skin;
 };
 
 } // namespace sonnet::world
