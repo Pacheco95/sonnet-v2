@@ -1,9 +1,11 @@
 #pragma once
 
+#include <sonnet/api/render/Light.h>
 #include <sonnet/core/Types.h>
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // Forward declarations — callers only need the full types when constructing.
 namespace sonnet::world        { class Scene; class GameObject; }
@@ -11,11 +13,13 @@ namespace sonnet::renderer::frontend { class Renderer; }
 
 namespace sonnet::scene {
 
-// Result of a scene load: scene-graph objects and named material templates
-// created from the JSON's assets.materials section.
+// Result of a scene load: scene-graph objects, named material templates,
+// and lights parsed from objects with a "light" component.
 struct LoadedScene {
     std::unordered_map<std::string, world::GameObject *>           objects;
     std::unordered_map<std::string, core::MaterialTemplateHandle>  materials;
+    std::vector<api::render::DirectionalLight>                     directionalLights;
+    std::vector<api::render::PointLight>                           pointLights;
 };
 
 // Loads a scene from a JSON file or string.

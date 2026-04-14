@@ -14,10 +14,12 @@ uniform sampler2D uEmissive;
 uniform vec3      uEmissiveFactor;
 uniform float     uMetallic;
 uniform float     uRoughness;
+uniform vec4      uAlbedoFactor;  // per-material tint/scale (default {1,1,1,1})
 uniform float     uAlphaCutoff;  // 0.0 = disabled; > 0.0 = alpha-mask cutoff
 
 void main() {
     vec4 albedoSample = texture(uAlbedo, vTexCoord);
+    albedoSample.rgb *= uAlbedoFactor.rgb;
     if (uAlphaCutoff > 0.0 && albedoSample.a < uAlphaCutoff) discard;
 
     // Normal from tangent-space map → world space via TBN.

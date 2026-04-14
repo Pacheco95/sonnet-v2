@@ -16,12 +16,14 @@
 #include <sonnet/world/Scene.h>
 
 #include <imgui.h>
+#include <nlohmann/json.hpp>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <functional>
 #include <random>
 #include <string>
@@ -235,6 +237,41 @@ int main() {
     // render small indicator spheres for lights 1-7 without touching the scene graph.
     const auto sphereMeshHandle      = lamp.render->mesh;
     const auto emissiveMatTemplate   = lamp.render->material.templateHandle();
+
+    // ── Scene serialization ───────────────────────────────────────────────────
+    // Writes current local transforms of root-level objects back to scene.json.
+    // glTF sub-nodes (name contains '/') are skipped.
+    static constexpr const char *kSceneFile = DEMO_ASSETS_DIR "/scene.json";
+    auto saveScene = [&]() {
+        std::ifstream inFile{kSceneFile};
+        if (!inFile) return;
+        nlohmann::json doc = nlohmann::json::parse(inFile, nullptr, /*exceptions=*/false);
+        inFile.close();
+        if (doc.is_discarded() || !doc.contains("objects")) return;
+
+        for (auto &objSpec : doc["objects"]) {
+            const std::string name = objSpec.value("name", "");
+            if (name.empty() || name.find('/') != std::string::npos) continue;
+            auto it = loaded.objects.find(name);
+            if (it == loaded.objects.end()) continue;
+            const auto &tf = it->second->transform;
+
+            const auto p = tf.getLocalPosition();
+            objSpec["position"] = {p.x, p.y, p.z};
+
+            const auto r = tf.getLocalRotation();
+            objSpec["rotation"] = {r.x, r.y, r.z, r.w};
+
+            const auto s = tf.getLocalScale();
+            if (s == glm::vec3{1.0f})
+                objSpec.erase("scale");
+            else
+                objSpec["scale"] = {s.x, s.y, s.z};
+        }
+
+        std::ofstream outFile{kSceneFile};
+        outFile << doc.dump(4) << '\n';
+    };
 
     // ── HDR render target ─────────────────────────────────────────────────────
     const auto fbSize0    = window.getFrameBufferSize();
@@ -500,9 +537,16 @@ int main() {
 
     // Tweakable state exposed via ImGui.
     float     rotationSpeed  = 45.0f;
-    glm::vec3 lightDir       = {0.6f, 1.0f, 0.4f};
-    glm::vec3 lightColor     = {1.0f, 1.0f, 1.0f};
-    float     lightIntensity = 1.0f;
+    // Directional light — seeded from scene.json; falls back to defaults.
+    glm::vec3 lightDir       = loaded.directionalLights.empty()
+                                   ? glm::vec3{0.6f, 1.0f, 0.4f}
+                                   : loaded.directionalLights[0].direction;
+    glm::vec3 lightColor     = loaded.directionalLights.empty()
+                                   ? glm::vec3{1.0f, 1.0f, 1.0f}
+                                   : loaded.directionalLights[0].color;
+    float     lightIntensity = loaded.directionalLights.empty()
+                                   ? 1.0f
+                                   : loaded.directionalLights[0].intensity;
     float     exposure        = 1.0f;
     float     shadowBias      = 0.005f;
     float     bloomThreshold  = 0.8f;
@@ -525,7 +569,7 @@ int main() {
 
     // ── Editable point lights ─────────────────────────────────────────────────
     // Light 0 is the lamp sphere — position tracks lamp.transform, color/strength
-    // also drive the emissive material.  Lights 1-7 are freely placed.
+    // also drive the emissive material.  Remaining lights are freely placed.
     struct PointLightEdit {
         glm::vec3 color{1.0f, 1.0f, 1.0f};
         float     intensity{3.0f};
@@ -533,17 +577,14 @@ int main() {
         bool      enabled{true};
     };
     std::vector<PointLightEdit> pointLights;
-    // Light 0 — lamp sphere (position auto-synced to lamp transform)
-    pointLights.push_back({ .color = {1.0f, 0.75f, 0.3f}, .intensity = 6.0f });
-    // Light 1 — cool blue near the helmet
-    pointLights.push_back({ .color = {0.3f, 0.5f, 1.0f}, .intensity = 4.0f,
-                             .position = {-2.5f, 1.2f, 1.5f} });
-    // Light 2 — warm red on the right, behind the cube arm
-    pointLights.push_back({ .color = {1.0f, 0.2f, 0.1f}, .intensity = 4.0f,
-                             .position = { 2.5f, 0.8f, 1.0f} });
-    // Light 3 — teal below and behind, grazes the floor
-    pointLights.push_back({ .color = {0.1f, 0.9f, 0.7f}, .intensity = 3.0f,
-                             .position = { 0.0f, 0.1f, -2.0f} });
+    // Seed from scene.json loaded lights.
+    for (const auto &pl : loaded.pointLights) {
+        pointLights.push_back({
+            .color     = pl.color,
+            .intensity = pl.intensity,
+            .position  = pl.position,
+        });
+    }
 
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -1193,6 +1234,12 @@ int main() {
             if (ImGui::DragFloat3("Scale##hier", &scl.x, 0.01f, 0.001f, 100.0f))
                 selectedObject->transform.setLocalScale(scl);
         }
+
+        ImGui::Separator();
+        if (ImGui::Button("Save Scene"))
+            saveScene();
+        ImGui::SameLine();
+        ImGui::TextDisabled("writes transforms to scene.json");
 
         ImGui::End();
 

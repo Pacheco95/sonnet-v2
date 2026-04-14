@@ -1,5 +1,6 @@
 #include <sonnet/scene/SceneLoader.h>
 
+#include <sonnet/api/render/Light.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/loaders/ModelLoader.h>
 #include <sonnet/world/AnimationPlayer.h>
@@ -262,6 +263,31 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
             };
         }
 
+        // Light component
+        if (spec.contains("light")) {
+            const auto &lc   = spec["light"];
+            const std::string type = lc.at("type").get<std::string>();
+            const auto col   = lc.value("color", json::array({1.0, 1.0, 1.0}));
+            const glm::vec3 color{col[0].get<float>(), col[1].get<float>(), col[2].get<float>()};
+            const float intensity = lc.value("intensity", 1.0f);
+
+            if (type == "directional") {
+                const auto dir = lc.value("direction", json::array({0.0, -1.0, 0.0}));
+                result.directionalLights.push_back(api::render::DirectionalLight{
+                    .direction = glm::normalize(glm::vec3{
+                        dir[0].get<float>(), dir[1].get<float>(), dir[2].get<float>()}),
+                    .color     = color,
+                    .intensity = intensity,
+                });
+            } else if (type == "point") {
+                result.pointLights.push_back(api::render::PointLight{
+                    .position  = obj.transform.getWorldPosition(),
+                    .color     = color,
+                    .intensity = intensity,
+                });
+            }
+        }
+
         // Render component (requires renderer + resolved assets)
         if (renderer && spec.contains("render")) {
             const auto &rc = spec["render"];
@@ -347,6 +373,9 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                             }
                             if (lm.material.alphaMask)
                                 childMat.set("uAlphaCutoff", lm.material.alphaCutoff);
+                            childMat.set("uMetallic",     lm.material.metallicFactor);
+                            childMat.set("uRoughness",    lm.material.roughnessFactor);
+                            childMat.set("uAlbedoFactor", lm.material.albedoFactor);
 
                             if (rc.contains("textures")) {
                                 for (const auto &[uniform, texName] : rc["textures"].items()) {

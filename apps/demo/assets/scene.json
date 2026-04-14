@@ -1,115 +1,376 @@
 {
     "assets": {
-        "shaders": {
-            "lit":         { "vert": "shaders/gbuffer.vert",         "frag": "shaders/gbuffer.frag"          },
-            "skinned_lit": { "vert": "shaders/gbuffer_skinned.vert", "frag": "shaders/gbuffer.frag"          },
-            "emissive":    { "vert": "shaders/emissive.vert",        "frag": "shaders/gbuffer_emissive.frag" }
-        },
         "materials": {
-            "lit": {
-                "shader": "lit",
+            "lamp": {
                 "defaultValues": {
-                    "uShadowBias":     0.005,
-                    "uMetallic":       1.0,
-                    "uRoughness":      1.0,
-                    "uEmissiveFactor": [0.0, 0.0, 0.0],
-                    "uAlphaCutoff":    0.0
-                }
+                    "uEmissiveColor": [
+                        1.0,
+                        0.75,
+                        0.3
+                    ],
+                    "uEmissiveStrength": 6.0
+                },
+                "shader": "emissive"
+            },
+            "lit": {
+                "defaultValues": {
+                    "uAlbedoFactor": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                    ],
+                    "uAlphaCutoff": 0.0,
+                    "uEmissiveFactor": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "uMetallic": 1.0,
+                    "uRoughness": 1.0,
+                    "uShadowBias": 0.005
+                },
+                "shader": "lit"
             },
             "skinned_lit": {
-                "shader": "skinned_lit",
                 "defaultValues": {
-                    "uShadowBias":     0.005,
-                    "uMetallic":       1.0,
-                    "uRoughness":      1.0,
-                    "uEmissiveFactor": [0.0, 0.0, 0.0],
-                    "uAlphaCutoff":    0.0
-                }
-            },
-            "lamp": {
-                "shader": "emissive",
-                "defaultValues": {
-                    "uEmissiveColor":    [1.0, 0.75, 0.3],
-                    "uEmissiveStrength": 6.0
-                }
+                    "uAlbedoFactor": [
+                        1.0,
+                        1.0,
+                        1.0,
+                        1.0
+                    ],
+                    "uAlphaCutoff": 0.0,
+                    "uEmissiveFactor": [
+                        0.0,
+                        0.0,
+                        0.0
+                    ],
+                    "uMetallic": 1.0,
+                    "uRoughness": 1.0,
+                    "uShadowBias": 0.005
+                },
+                "shader": "skinned_lit"
             }
         },
         "meshes": {
-            "cube":    "cube.obj",
-            "floor":   { "primitive": "box",    "size": [6.0, 0.1, 6.0] },
-            "sphere":  { "primitive": "sphere", "segmentsX": 24, "segmentsY": 12 },
-            "helmet":  { "model": "models/DamagedHelmet.glb", "material": "lit" },
-            "fox":         { "model": "models/Fox.glb",         "material": "lit" },
-            "busterDrone": { "model": "models/buster_drone.glb", "material": "lit" }
+            "busterDrone": {
+                "material": "lit",
+                "model": "models/buster_drone.glb"
+            },
+            "cube": "cube.obj",
+            "floor": {
+                "primitive": "box",
+                "size": [
+                    6.0,
+                    0.1,
+                    6.0
+                ]
+            },
+            "fox": {
+                "material": "lit",
+                "model": "models/Fox.glb"
+            },
+            "helmet": {
+                "material": "lit",
+                "model": "models/DamagedHelmet.glb"
+            },
+            "sphere": {
+                "primitive": "sphere",
+                "segmentsX": 24,
+                "segmentsY": 12
+            }
+        },
+        "shaders": {
+            "emissive": {
+                "frag": "shaders/gbuffer_emissive.frag",
+                "vert": "shaders/emissive.vert"
+            },
+            "lit": {
+                "frag": "shaders/gbuffer.frag",
+                "vert": "shaders/gbuffer.vert"
+            },
+            "skinned_lit": {
+                "frag": "shaders/gbuffer.frag",
+                "vert": "shaders/gbuffer_skinned.vert"
+            }
         },
         "textures": {
+            "flatNormal": {
+                "color": [
+                    128,
+                    128,
+                    255
+                ],
+                "srgb": false
+            },
             "metalAlbedo": "metal034_albedo.jpg",
-            "metalNormal": { "file": "metal034_normal.jpg", "srgb": false },
-            "metalORM":    { "file": "metal034_orm.png",   "srgb": false },
+            "metalNormal": {
+                "file": "metal034_normal.jpg",
+                "srgb": false
+            },
+            "metalORM": {
+                "file": "metal034_orm.png",
+                "srgb": false
+            },
             "tilesAlbedo": "tiles074_albedo.jpg",
-            "tilesNormal": { "file": "tiles074_normal.jpg", "srgb": false },
-            "tilesORM":    { "file": "tiles074_orm.png",   "srgb": false },
-            "flatNormal":  { "color": [128, 128, 255], "srgb": false }
+            "tilesNormal": {
+                "file": "tiles074_normal.jpg",
+                "srgb": false
+            },
+            "tilesORM": {
+                "file": "tiles074_orm.png",
+                "srgb": false
+            }
         }
     },
     "objects": [
         {
-            "name": "Arm"
+            "light": {
+                "color": [
+                    1.0,
+                    0.95,
+                    0.85
+                ],
+                "direction": [
+                    0.6,
+                    1.0,
+                    0.4
+                ],
+                "intensity": 1.0,
+                "type": "directional"
+            },
+            "name": "Sun",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ]
         },
         {
-            "name":     "Cube",
-            "parent":   "Arm",
-            "position": [1.0, 0.0, 0.0],
+            "light": {
+                "color": [
+                    1.0,
+                    0.75,
+                    0.3
+                ],
+                "intensity": 6.0,
+                "type": "point"
+            },
+            "name": "Lamp",
+            "position": [
+                0.0,
+                0.6000000238418579,
+                0.0
+            ],
             "render": {
-                "mesh":     "cube",
+                "material": "lamp",
+                "mesh": "sphere"
+            },
+            "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "scale": [
+                0.11999999731779099,
+                0.11999999731779099,
+                0.11999999731779099
+            ]
+        },
+        {
+            "light": {
+                "color": [
+                    0.3,
+                    0.5,
+                    1.0
+                ],
+                "intensity": 4.0,
+                "type": "point"
+            },
+            "name": "Light1",
+            "position": [
+                -2.5,
+                1.2000000476837158,
+                1.5
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ]
+        },
+        {
+            "light": {
+                "color": [
+                    1.0,
+                    0.4,
+                    0.3
+                ],
+                "intensity": 3.5,
+                "type": "point"
+            },
+            "name": "Light2",
+            "position": [
+                2.0,
+                1.5,
+                -1.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ]
+        },
+        {
+            "name": "Arm",
+            "position": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "rotation": [
+                -0.0,
+                -0.9482434988021851,
+                -0.0,
+                -0.317544162273407
+            ]
+        },
+        {
+            "name": "Cube",
+            "parent": "Arm",
+            "position": [
+                1.0,
+                0.0,
+                0.0
+            ],
+            "render": {
                 "material": "lit",
+                "mesh": "cube",
                 "textures": {
-                    "uAlbedo":    "metalAlbedo",
+                    "uAlbedo": "metalAlbedo",
                     "uNormalMap": "metalNormal",
-                    "uORM":       "metalORM"
+                    "uORM": "metalORM"
                 }
-            }
+            },
+            "rotation": [
+                0.8116477727890015,
+                0.0,
+                0.0,
+                -0.5841471552848816
+            ]
         },
         {
-            "name":     "Floor",
-            "position": [0.0, -0.8, 0.0],
+            "name": "Floor",
+            "position": [
+                0.0,
+                -0.800000011920929,
+                0.0
+            ],
             "render": {
-                "mesh":     "floor",
                 "material": "lit",
+                "mesh": "floor",
                 "textures": {
-                    "uAlbedo":    "tilesAlbedo",
+                    "uAlbedo": "tilesAlbedo",
                     "uNormalMap": "tilesNormal",
-                    "uORM":       "tilesORM"
+                    "uORM": "tilesORM"
                 }
-            }
+            },
+            "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ]
         },
         {
-            "name":     "Camera",
-            "position": [0.0, 0.0, 3.0],
-            "camera":   { "fov": 60.0, "near": 0.1, "far": 200.0 }
+            "camera": {
+                "far": 200.0,
+                "fov": 60.0,
+                "near": 0.1
+            },
+            "name": "Camera",
+            "position": [
+                0.0,
+                0.0,
+                3.0
+            ],
+            "rotation": [
+                -0.004897956270724535,
+                0.3534676730632782,
+                0.0018507695058360696,
+                0.9354320764541626
+            ]
         },
         {
-            "name":     "Lamp",
-            "position": [0.0, 0.6, 0.0],
-            "scale":    [0.12, 0.12, 0.12],
-            "render":   { "mesh": "sphere", "material": "lamp" }
+            "name": "Helmet",
+            "position": [
+                -2.5,
+                0.5,
+                0.0
+            ],
+            "render": {
+                "mesh": "helmet"
+            },
+            "rotation": [
+                0.07863578200340271,
+                0.3246176242828369,
+                -0.19219806790351868,
+                0.9227674007415771
+            ]
         },
         {
-            "name":     "Helmet",
-            "position": [-2.5, 0.5, 0.0],
-            "render":   { "mesh": "helmet" }
+            "name": "Fox",
+            "position": [
+                2.0,
+                -0.75,
+                0.0
+            ],
+            "render": {
+                "mesh": "fox"
+            },
+            "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "scale": [
+                0.009999999776482582,
+                0.009999999776482582,
+                0.009999999776482582
+            ]
         },
         {
-            "name":     "Fox",
-            "position": [2.0, -0.75, 0.0],
-            "scale":    [0.01, 0.01, 0.01],
-            "render":   { "mesh": "fox" }
-        },
-        {
-            "name":     "BusterDrone",
-            "position": [0.0, 0.3, 1.5],
-            "scale":    [0.3, 0.3, 0.3],
-            "render":   { "mesh": "busterDrone" }
+            "name": "BusterDrone",
+            "position": [
+                0.0,
+                0.30000001192092896,
+                1.5
+            ],
+            "render": {
+                "mesh": "busterDrone"
+            },
+            "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "scale": [
+                0.30000001192092896,
+                0.30000001192092896,
+                0.30000001192092896
+            ]
         }
     ]
 }
