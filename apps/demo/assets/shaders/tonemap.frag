@@ -3,8 +3,10 @@ in  vec2 vUV;
 out vec4 fragColor;
 uniform sampler2D uHdrColor;
 uniform sampler2D uBloomTexture;
+uniform sampler2D uSSRTex;
 uniform float     uExposure;
 uniform float     uBloomIntensity;
+uniform float     uSSRStrength;
 
 // ACES filmic tone-mapping approximation (Krzysztof Narkowicz)
 vec3 aces(vec3 x) {
@@ -14,6 +16,7 @@ vec3 aces(vec3 x) {
 
 void main() {
     vec3 hdr  = texture(uHdrColor, vUV).rgb
-              + texture(uBloomTexture, vUV).rgb * uBloomIntensity;
+              + texture(uBloomTexture, vUV).rgb * uBloomIntensity
+              + texture(uSSRTex,      vUV).rgb * uSSRStrength;
     fragColor = vec4(aces(hdr * uExposure), 1.0);
 }

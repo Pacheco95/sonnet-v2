@@ -400,6 +400,10 @@ int main() {
     const auto bloomBrightTex = renderer.colorTextureHandle(bloomBrightRT, 0);
     const auto bloomBlurTex   = renderer.colorTextureHandle(bloomBlurRT,   0);
 
+    // ── SSR render target (RGBA16F — reflection colour) ───────────────────────
+    const auto ssrRT  = makeBloomRT();
+    const auto ssrTex = renderer.colorTextureHandle(ssrRT, 0);
+
     // Bright-pass material.
     const auto noDepthState = sonnet::api::render::RenderState{
         .depthTest  = false,
@@ -430,9 +434,23 @@ int main() {
     bloomBlurHMat.set("uHorizontal", 1); // non-zero int == true in GLSL
     bloomBlurVMat.set("uHorizontal", 0);
 
+    // ── SSR shader and material ───────────────────────────────────────────────
+    const auto ssrFragSrc = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/ssr.frag");
+    const auto ssrShader  = renderer.createShader(tonemapVertSrc, ssrFragSrc);
+    const auto ssrMatTmpl = renderer.createMaterial(sonnet::api::render::MaterialTemplate{
+        .shaderHandle = ssrShader,
+        .renderState  = noDepthState,
+    });
+    sonnet::api::render::MaterialInstance ssrMat{ssrMatTmpl};
+    ssrMat.addTexture("uDepth",           gbufDepthTex);
+    ssrMat.addTexture("uNormalMetallic",  gbufNormalMetallicTex);
+    ssrMat.addTexture("uAlbedoRoughness", gbufAlbedoRoughTex);
+    ssrMat.addTexture("uHDRColor",        hdrTexHandle);
+
     sonnet::api::render::MaterialInstance tonemapMat{tonemapMatTmpl};
     tonemapMat.addTexture("uHdrColor",      hdrTexHandle);
     tonemapMat.addTexture("uBloomTexture",  bloomBrightTex); // final blur result ends up here
+    tonemapMat.addTexture("uSSRTex",        ssrTex);
 
     // ── FXAA shader and material ──────────────────────────────────────────────
     const auto fxaaVertSrc  = sonnet::loaders::ShaderLoader::load(DEMO_ASSETS_DIR "/shaders/fxaa.vert");
@@ -557,6 +575,13 @@ int main() {
     float     ssaoBias        = 0.05f;
     bool      ssaoShow        = false; // debug: show raw AO buffer
     bool      fxaaEnabled     = true;
+    bool      ssrEnabled      = true;
+    int       ssrMaxSteps     = 64;
+    float     ssrStepSize     = 0.1f;
+    float     ssrThickness    = 0.2f;
+    float     ssrMaxDistance  = 10.0f;
+    float     ssrRoughnessMax = 0.4f;
+    float     ssrStrength     = 1.0f;
     float     pointShadowBias = 0.008f;
     bool      uiMode          = false;
 
@@ -971,6 +996,24 @@ int main() {
             renderer.endFrame();
         }
 
+        // ── Pass 2.2: SSR → ssrRT ─────────────────────────────────────────────
+        renderer.bindRenderTarget(ssrRT);
+        backend.setViewport(fbSize.x, fbSize.y);
+        backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+        if (ssrEnabled) {
+            ssrMat.set("uProjection",    projMat);
+            ssrMat.set("uInvProjection", invProjMat);
+            ssrMat.set("uView",          viewMat);
+            ssrMat.set("uResolution",    glm::vec2(static_cast<float>(fbSize.x),
+                                                   static_cast<float>(fbSize.y)));
+            ssrMat.set("uMaxSteps",      ssrMaxSteps);
+            ssrMat.set("uStepSize",      ssrStepSize);
+            ssrMat.set("uThickness",     ssrThickness);
+            ssrMat.set("uMaxDistance",   ssrMaxDistance);
+            ssrMat.set("uRoughnessMax",  ssrRoughnessMax);
+            fullscreenQuad(ssrMat);
+        }
+
         // ── Pass 2.5: bloom ────────────────────────────────────────────────────
 
         // Bright-pass extract.
@@ -996,6 +1039,7 @@ int main() {
 
         tonemapMat.set("uExposure",       exposure);
         tonemapMat.set("uBloomIntensity", bloomIntensity);
+        tonemapMat.set("uSSRStrength",    ssrEnabled ? ssrStrength : 0.0f);
 
         if (ssaoShow) {
             // ── Debug: show raw SSAO buffer as grayscale ─────────────────────
@@ -1102,6 +1146,17 @@ int main() {
                 ImGui::Checkbox   ("Visualize AO",  &ssaoShow);
                 ImGui::SliderFloat("Radius##ssao",  &ssaoRadius, 0.1f, 3.0f);
                 ImGui::SliderFloat("Bias##ssao",    &ssaoBias,   0.01f, 0.2f, "%.3f");
+            }
+
+            if (ImGui::CollapsingHeader("SSR", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox   ("Enable##ssr",        &ssrEnabled);
+                ImGui::SliderFloat("Strength##ssr",      &ssrStrength,     0.0f, 2.0f);
+                ImGui::SliderInt  ("Max Steps##ssr",     &ssrMaxSteps,     8,    128);
+                ImGui::SliderFloat("Step Size##ssr",     &ssrStepSize,     0.01f, 0.5f);
+                ImGui::SliderFloat("Thickness##ssr",     &ssrThickness,    0.01f, 1.0f);
+                ImGui::SliderFloat("Max Distance##ssr",  &ssrMaxDistance,  1.0f,  30.0f);
+                ImGui::SliderFloat("Roughness Max##ssr", &ssrRoughnessMax, 0.0f,  1.0f);
+                ImGui::TextDisabled("Only affects metallic/smooth surfaces");
             }
 
             if (ImGui::CollapsingHeader("Anti-aliasing", ImGuiTreeNodeFlags_DefaultOpen)) {
