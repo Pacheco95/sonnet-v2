@@ -1461,7 +1461,7 @@ int main() {
             // GPU object-ID picking: render every mesh as a flat color encoding
             // its 1-based index into an RGBA8 RT, then glReadPixels at the click.
             const bool lmbClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-            if (lmbClicked && gizmoActiveAxis == 0) {
+            if (lmbClicked && gizmoActiveAxis == 0 && gizmoHoverAxis == 0) {
                 const ImVec2 mp = ImGui::GetMousePos();
 
                 // Helper: walk up hierarchy to find a selectable (no '/' in name) ancestor.
