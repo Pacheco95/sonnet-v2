@@ -6,21 +6,39 @@
 
 namespace {
 
-// Non-owning ITexture wrapper used to expose render target color attachments
-// as GPUTextureHandles without transferring ownership.
+// ITexture wrapper that looks up the real texture through the Renderer's
+// render-target map every call. This means the handle survives resizeRenderTarget:
+// when the underlying IRenderTarget is replaced the wrapper automatically sees
+// the new textures without any handle invalidation.
+using RTMap = std::unordered_map<sonnet::core::RenderTargetHandle,
+                                  std::unique_ptr<sonnet::api::render::IRenderTarget>>;
+
 class BorrowedTexture final : public sonnet::api::render::ITexture {
 public:
-    explicit BorrowedTexture(const sonnet::api::render::ITexture *t) : m_inner(t) {}
+    BorrowedTexture(const RTMap &rts,
+                    sonnet::core::RenderTargetHandle rtHandle,
+                    int colorIndex)           // -1 = depth attachment
+        : m_rts(rts), m_handle(rtHandle), m_colorIndex(colorIndex) {}
 
-    void bind(std::uint8_t slot)   const override { m_inner->bind(slot); }
-    void unbind(std::uint8_t slot) const override { m_inner->unbind(slot); }
+    const sonnet::api::render::ITexture *inner() const {
+        auto it = m_rts.find(m_handle);
+        if (it == m_rts.end()) return nullptr;
+        return m_colorIndex >= 0
+            ? it->second->colorTexture(static_cast<std::size_t>(m_colorIndex))
+            : it->second->depthTexture();
+    }
 
-    [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return m_inner->textureDesc(); }
-    [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return m_inner->samplerDesc(); }
-    [[nodiscard]] unsigned getNativeHandle() const override { return m_inner->getNativeHandle(); }
+    void bind(std::uint8_t slot)   const override { if (auto *t = inner()) t->bind(slot); }
+    void unbind(std::uint8_t slot) const override { if (auto *t = inner()) t->unbind(slot); }
+
+    [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return inner()->textureDesc(); }
+    [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return inner()->samplerDesc(); }
+    [[nodiscard]] unsigned getNativeHandle() const override { return inner() ? inner()->getNativeHandle() : 0u; }
 
 private:
-    const sonnet::api::render::ITexture *m_inner;
+    const RTMap                          &m_rts;
+    sonnet::core::RenderTargetHandle      m_handle;
+    int                                   m_colorIndex;
 };
 
 } // anonymous namespace
@@ -67,6 +85,7 @@ RenderTargetHandle Renderer::createRenderTarget(const RenderTargetDesc &desc) {
     auto rt = m_backend.renderTargetFactory().create(desc);
     RenderTargetHandle handle{m_nextId++};
     m_renderTargets.emplace(handle, std::move(rt));
+    m_renderTargetDescs.emplace(handle, desc);
     return handle;
 }
 
@@ -77,31 +96,37 @@ void Renderer::bindRenderTarget(RenderTargetHandle handle) {
 }
 
 GPUTextureHandle Renderer::depthTextureHandle(RenderTargetHandle handle) {
-    auto it = m_renderTargets.find(handle);
-    if (it == m_renderTargets.end())
+    if (m_renderTargets.find(handle) == m_renderTargets.end())
         throw std::invalid_argument("depthTextureHandle: unknown RenderTargetHandle");
-
-    const ITexture *tex = it->second->depthTexture();
-    if (!tex)
+    if (!m_renderTargets.at(handle)->depthTexture())
         throw std::invalid_argument("depthTextureHandle: render target has no depth texture");
 
     GPUTextureHandle texHandle{m_nextId++};
-    m_textures.emplace(texHandle, std::make_unique<BorrowedTexture>(tex));
+    m_textures.emplace(texHandle,
+        std::make_unique<BorrowedTexture>(m_renderTargets, handle, -1));
     return texHandle;
 }
 
 GPUTextureHandle Renderer::colorTextureHandle(RenderTargetHandle handle, std::size_t colorIndex) {
-    auto it = m_renderTargets.find(handle);
-    if (it == m_renderTargets.end())
+    if (m_renderTargets.find(handle) == m_renderTargets.end())
         throw std::invalid_argument("colorTextureHandle: unknown RenderTargetHandle");
-
-    const ITexture *tex = it->second->colorTexture(colorIndex);
-    if (!tex)
+    if (!m_renderTargets.at(handle)->colorTexture(colorIndex))
         throw std::invalid_argument("colorTextureHandle: render target has no color texture at index");
 
     GPUTextureHandle texHandle{m_nextId++};
-    m_textures.emplace(texHandle, std::make_unique<BorrowedTexture>(tex));
+    m_textures.emplace(texHandle,
+        std::make_unique<BorrowedTexture>(m_renderTargets, handle, static_cast<int>(colorIndex)));
     return texHandle;
+}
+
+void Renderer::resizeRenderTarget(RenderTargetHandle handle,
+                                   std::uint32_t width, std::uint32_t height) {
+    auto descIt = m_renderTargetDescs.find(handle);
+    if (descIt == m_renderTargetDescs.end()) return;
+    descIt->second.width  = width;
+    descIt->second.height = height;
+    m_renderTargets[handle] = m_backend.renderTargetFactory().create(descIt->second);
+    // All BorrowedTextures for this handle automatically see the new RT.
 }
 
 const api::render::MaterialTemplate *Renderer::getMaterial(core::MaterialTemplateHandle h) const {

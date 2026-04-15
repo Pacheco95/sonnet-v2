@@ -32,6 +32,12 @@ public:
                                                                const api::render::CPUTextureBuffer &data);
     [[nodiscard]] core::RenderTargetHandle       createRenderTarget(const api::render::RenderTargetDesc &desc);
     void                                         bindRenderTarget(core::RenderTargetHandle handle);
+    // Recreate the render target at a new size. All GPUTextureHandles obtained
+    // from colorTextureHandle/depthTextureHandle for this RT remain valid and
+    // automatically reflect the new textures.
+    void                                         resizeRenderTarget(core::RenderTargetHandle handle,
+                                                                    std::uint32_t width,
+                                                                    std::uint32_t height);
     // Returns a GPUTextureHandle that borrows the render target's color attachment.
     // The handle is invalidated if the render target is destroyed.
     [[nodiscard]] core::GPUTextureHandle         colorTextureHandle(core::RenderTargetHandle handle,
@@ -77,6 +83,7 @@ private:
     std::unordered_map<core::MaterialTemplateHandle, api::render::MaterialTemplate>                  m_materials;
     std::unordered_map<core::GPUTextureHandle,       std::unique_ptr<api::render::ITexture>>         m_textures;
     std::unordered_map<core::RenderTargetHandle,     std::unique_ptr<api::render::IRenderTarget>>    m_renderTargets;
+    std::unordered_map<core::RenderTargetHandle,     api::render::RenderTargetDesc>                  m_renderTargetDescs;
 
     std::size_t m_nextId = 1; // monotonic id for handle generation
 };

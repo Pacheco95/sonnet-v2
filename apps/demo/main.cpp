@@ -471,7 +471,7 @@ int main() {
         }},
     });
     const auto viewportTex   = renderer.colorTextureHandle(viewportRT, 0);
-    const auto viewportTexId = static_cast<GLuint>(renderer.nativeTextureId(viewportTex));
+    GLuint viewportTexId = static_cast<GLuint>(renderer.nativeTextureId(viewportTex));
 
     // ── Bloom render targets (same resolution as HDR) ─────────────────────────
     const auto makeBloomRT = [&]() {
@@ -784,6 +784,7 @@ int main() {
     glm::vec3 dragStartScale{1.0f};
     ImVec2    dragStartMouse{};
     float     dragAccum = 0.0f;
+    auto lastFbSize = fbSize0;
 
     while (!window.shouldClose()) {
         const double now = glfwGetTime();
@@ -847,6 +848,22 @@ int main() {
         }
 
         const auto fbSize = window.getFrameBufferSize();
+
+        // ── Resize render targets when the window size changes ────────────────
+        if (fbSize != lastFbSize && fbSize.x > 0 && fbSize.y > 0) {
+            lastFbSize = fbSize;
+            const auto w = static_cast<std::uint32_t>(fbSize.x);
+            const auto h = static_cast<std::uint32_t>(fbSize.y);
+            const sonnet::core::RenderTargetHandle kResizableRTs[] = {
+                hdrRTHandle, gbufRTHandle, ssaoRTHandle, ssaoBlurRTHandle,
+                ldrRT, viewportRT, bloomBrightRT, bloomBlurRT, ssrRT,
+                outlineMaskRT, pickingRT,
+            };
+            for (auto handle : kResizableRTs) {
+                renderer.resizeRenderTarget(handle, w, h);
+            }
+            viewportTexId = static_cast<GLuint>(renderer.nativeTextureId(viewportTex));
+        }
 
         // Camera controlled by RMB only when the 3D viewport panel is focused.
         if (viewportFocused && input.isMouseDown(sonnet::api::input::MouseButton::Right)) {
