@@ -1,4 +1,11 @@
-add_executable(demo main.cpp)
+add_executable(demo
+    main.cpp
+    ShaderRegistry.cpp
+    ShadowMaps.cpp
+    RenderTargets.cpp
+    PostProcess.cpp
+    EditorUI.cpp
+)
 
 target_link_libraries(demo PRIVATE
     sonnet::renderer::frontend
