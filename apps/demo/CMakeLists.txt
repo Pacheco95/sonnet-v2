@@ -10,6 +10,7 @@ target_link_libraries(demo PRIVATE
     imgui::imgui
     sonnet::window
     sonnet::input
+    sonnet::scripting
     glm::glm
     glad
     stb::image

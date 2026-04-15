@@ -11,6 +11,7 @@
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <glad/glad.h>
 #include <sonnet/scene/SceneLoader.h>
+#include <sonnet/scripting/LuaScriptRuntime.h>
 #include <sonnet/ui/ImGuiLayer.h>
 #include <sonnet/window/GLFWInputAdapter.h>
 #include <sonnet/window/GLFWWindow.h>
@@ -255,6 +256,28 @@ int main() {
         DEMO_ASSETS_DIR,
         scene,
         renderer);
+
+    // ── Scripting runtime ─────────────────────────────────────────────────────
+    sonnet::scripting::LuaScriptRuntime scriptRuntime;
+    {
+        // Scan scene.json for objects that declare a "script" field and attach them.
+        std::ifstream sceneFile{DEMO_ASSETS_DIR "/scene.json"};
+        if (sceneFile) {
+            nlohmann::json doc = nlohmann::json::parse(sceneFile, nullptr, false);
+            if (!doc.is_discarded() && doc.contains("objects")) {
+                for (const auto &jobj : doc["objects"]) {
+                    if (!jobj.contains("script") || !jobj.contains("name")) continue;
+                    const std::string objName    = jobj["name"].get<std::string>();
+                    const std::string scriptPath = std::string(DEMO_ASSETS_DIR "/")
+                                                 + jobj["script"].get<std::string>();
+                    auto it = loaded.objects.find(objName);
+                    if (it != loaded.objects.end())
+                        scriptRuntime.attachScript(*it->second, scriptPath);
+                }
+            }
+        }
+    }
+    scriptRuntime.init(scene, input);
 
     auto &arm       = *loaded.objects.at("Arm");
     auto &cube      = *loaded.objects.at("Cube");
@@ -802,7 +825,7 @@ int main() {
 
         window.pollEvents();
 
-        // ── Shader hot reload: poll file mtimes every 0.5 s ────────────────
+        // ── Hot reload: poll shaders + scripts every 0.5 s ────────────────
         shaderPollAccum += dt;
         if (shaderPollAccum >= 0.5) {
             shaderPollAccum = 0.0;
@@ -825,6 +848,10 @@ int main() {
                     shaderReloadMsgTimer = 6.0f;
                 }
             }
+            if (const auto msg = scriptRuntime.reload(); !msg.empty()) {
+                shaderReloadMsg      = msg;
+                shaderReloadMsgTimer = msg.rfind("Error", 0) == 0 ? 6.0f : 3.0f;
+            }
         }
         shaderReloadMsgTimer -= dt;
 
@@ -845,9 +872,10 @@ int main() {
         // Arm orbits around Y — the cube follows as a child.
         arm.transform.setLocalRotation(
             glm::angleAxis(glm::radians(rotation), glm::vec3{0, 1, 0}));
-        // Cube also self-spins on its local X axis.
-        cube.transform.setLocalRotation(
-            glm::angleAxis(glm::radians(rotation * 0.5f), glm::vec3{1, 0, 0}));
+        // Cube rotation is driven by its Lua script (rotate.lua).
+
+        // ── Script update ─────────────────────────────────────────────────────
+        scriptRuntime.update(dt);
 
         // ── Animation players ─────────────────────────────────────────────────
         for (const auto &obj : scene.objects()) {

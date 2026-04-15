@@ -96,6 +96,25 @@ FetchContent_Declare(
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
 
+# Lua 5.4 — CMake-friendly wrapper around the official source
+FetchContent_Declare(
+    lua
+    GIT_REPOSITORY https://github.com/walterschell/Lua.git
+    GIT_TAG        v5.4.7
+    GIT_SHALLOW    TRUE
+)
+set(LUA_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(lua)
+
+# sol2 — header-only C++ binding for Lua (develop/3.5.0 fixes C++23 optional<T&> bug)
+FetchContent_Declare(
+    sol2
+    GIT_REPOSITORY https://github.com/ThePhD/sol2.git
+    GIT_TAG        9190880
+    GIT_SHALLOW    FALSE
+)
+FetchContent_MakeAvailable(sol2)
+
 if(SONNET_BUILD_TESTS)
     FetchContent_Declare(
         Catch2

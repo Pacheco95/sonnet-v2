@@ -267,7 +267,8 @@
                 0.0,
                 0.0,
                 -0.5841471552848816
-            ]
+            ],
+            "script": "scripts/rotate.lua"
         },
         {
             "name": "Floor",
