@@ -16,6 +16,16 @@ public:
     [[nodiscard]] GameObject &createObject(std::string name,
                                            GameObject  *parent = nullptr);
 
+    // Shallow-clone src: copies Transform, RenderComponent, LightComponent, and
+    // CameraComponent. AnimationPlayer and SkinComponent are not duplicated.
+    // The clone is given the same parent and the name "<src.name> (Copy)".
+    [[nodiscard]] GameObject &duplicateObject(const GameObject &src);
+
+    // Remove obj and every descendant from the scene.
+    // The caller is responsible for clearing any raw pointers to the removed
+    // objects (e.g. selection state, script instances) before calling this.
+    void destroyObject(GameObject *obj);
+
     // Append a RenderItem for every object that has a RenderComponent.
     void buildRenderQueue(std::vector<api::render::RenderItem> &queue) const;
 

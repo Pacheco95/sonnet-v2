@@ -825,6 +825,27 @@ int main() {
         if (input.isKeyJustPressed(sonnet::api::input::Key::Escape))
             window.requestClose();
 
+        // Delete selected object (only when no ImGui widget is capturing keyboard).
+        if (selectedObject && !ImGui::GetIO().WantCaptureKeyboard &&
+            input.isKeyJustPressed(sonnet::api::input::Key::Delete)) {
+            // Collect subtree, detach scripts, destroy.
+            std::function<void(sonnet::world::GameObject *)> destroySubtree =
+                [&](sonnet::world::GameObject *root) {
+                    for (auto *childTf : root->transform.children()) {
+                        for (auto &o : scene.objects()) {
+                            if (&o->transform == childTf) {
+                                destroySubtree(o.get());
+                                break;
+                            }
+                        }
+                    }
+                    scriptRuntime.detachObject(root);
+                };
+            destroySubtree(selectedObject);
+            scene.destroyObject(selectedObject);
+            selectedObject = nullptr;
+        }
+
         const auto fbSize = window.getFrameBufferSize();
 
         // Camera controlled by RMB only when the 3D viewport panel is focused.
@@ -1724,6 +1745,32 @@ int main() {
             for (auto &obj : scene.objects())
                 tfToObj[&obj->transform] = obj.get();
 
+            // Helper: detach scripts for obj and all its descendants, then
+            // destroy. Clears selectedObject if it falls within the subtree.
+            auto destroySubtree = [&](sonnet::world::GameObject *root) {
+                // Collect the full subtree so we can detach scripts before
+                // any pointer becomes dangling.
+                std::vector<sonnet::world::GameObject *> subtree;
+                std::function<void(sonnet::world::GameObject *)> collect =
+                    [&](sonnet::world::GameObject *o) {
+                        subtree.push_back(o);
+                        for (auto *childTf : o->transform.children()) {
+                            auto it = tfToObj.find(childTf);
+                            if (it != tfToObj.end())
+                                collect(it->second);
+                        }
+                    };
+                collect(root);
+                for (auto *o : subtree) {
+                    scriptRuntime.detachObject(o);
+                    if (selectedObject == o) selectedObject = nullptr;
+                }
+                scene.destroyObject(root);
+            };
+
+            sonnet::world::GameObject *pendingDuplicate = nullptr;
+            sonnet::world::GameObject *pendingDestroy   = nullptr;
+
             std::function<void(sonnet::world::GameObject &)> drawNode =
                 [&](sonnet::world::GameObject &obj) {
                     std::vector<sonnet::world::GameObject *> childObjs;
@@ -1739,6 +1786,8 @@ int main() {
                     if (&obj == selectedObject)
                         flags |= ImGuiTreeNodeFlags_Selected;
 
+                    // Use PushID so context-menu IDs don't collide across nodes.
+                    ImGui::PushID(&obj);
                     const bool opened = ImGui::TreeNodeEx(obj.name.c_str(), flags);
                     if (ImGui::IsItemClicked()) {
                         if (selectedObject != &obj) {
@@ -1747,6 +1796,14 @@ int main() {
                                 obj.transform.getLocalRotation()));
                         }
                     }
+                    // Right-click context menu.
+                    if (ImGui::BeginPopupContextItem("node_ctx")) {
+                        if (ImGui::MenuItem("Duplicate"))  pendingDuplicate = &obj;
+                        if (ImGui::MenuItem("Delete"))     pendingDestroy   = &obj;
+                        ImGui::EndPopup();
+                    }
+                    ImGui::PopID();
+
                     if (opened && !childObjs.empty()) {
                         for (auto *child : childObjs) drawNode(*child);
                         ImGui::TreePop();
@@ -1757,7 +1814,24 @@ int main() {
                 if (obj->transform.getParent() == nullptr)
                     drawNode(*obj);
 
+            // Deferred actions (must happen after the tree is fully drawn).
+            if (pendingDuplicate) {
+                auto &dup = scene.duplicateObject(*pendingDuplicate);
+                selectedObject = &dup;
+                editEuler = glm::degrees(glm::eulerAngles(dup.transform.getLocalRotation()));
+            }
+            if (pendingDestroy)
+                destroySubtree(pendingDestroy);
+
             ImGui::Separator();
+            // Add Empty — placed at the origin (or in front of camera).
+            if (ImGui::Button("+ Add Empty")) {
+                auto &neo = scene.createObject("Object");
+                neo.transform.setLocalPosition(camPos + glm::vec3{0.0f, 0.0f, -2.0f});
+                selectedObject = &neo;
+                editEuler = glm::vec3{0.0f};
+            }
+            ImGui::SameLine();
             if (ImGui::Button("Save Scene"))
                 saveScene();
             ImGui::SameLine();

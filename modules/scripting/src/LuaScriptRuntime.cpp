@@ -233,6 +233,14 @@ void LuaScriptRuntime::update(float dt) {
     }
 }
 
+void LuaScriptRuntime::detachObject(GameObject *obj) {
+    auto &instances = m_impl->instances;
+    instances.erase(
+        std::remove_if(instances.begin(), instances.end(),
+                       [obj](const auto &inst) { return inst.obj == obj; }),
+        instances.end());
+}
+
 std::string LuaScriptRuntime::reload() {
     std::string result;
     for (auto &inst : m_impl->instances) {

@@ -35,6 +35,11 @@ public:
     // Tick all active script instances. Call once per frame.
     virtual void update(float dt) = 0;
 
+    // Remove all script instances attached to obj. Call before destroying the
+    // game object to prevent dangling pointers inside the runtime.
+    // No-op default provided for runtimes that don't need it.
+    virtual void detachObject(sonnet::world::GameObject *obj) {}
+
     // Check attached script files for changes and hot-reload any that have
     // been modified. Returns a human-readable notification string:
     //   ""                  — nothing changed

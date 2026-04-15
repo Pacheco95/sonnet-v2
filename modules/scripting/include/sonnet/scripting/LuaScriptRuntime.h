@@ -18,9 +18,10 @@ public:
               const sonnet::input::InputSystem &input) override;
     void attachScript(sonnet::world::GameObject &obj,
                        const std::string         &scriptPath) override;
-    void        update(float dt) override;
-    std::string reload()        override;
-    void        shutdown()      override;
+    void        update(float dt)                          override;
+    void        detachObject(world::GameObject *obj)      override;
+    std::string reload()                                  override;
+    void        shutdown()                                override;
 
 private:
     struct Impl;
