@@ -18,6 +18,7 @@
 #include <functional>
 #include <fstream>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace sonnet::scene {
 
@@ -162,6 +163,17 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
     };
     std::unordered_map<std::string, ModelEntry> modelEntries;
 
+    // Pre-scan: collect mesh names referenced by enabled objects so we can skip
+    // loading GPU resources for meshes that are only used by disabled objects.
+    std::unordered_set<std::string> neededMeshes;
+    if (renderer && doc.contains("objects")) {
+        for (const auto &spec : doc["objects"]) {
+            if (!spec.value("enabled", true)) continue;
+            if (spec.contains("render") && spec["render"].contains("mesh"))
+                neededMeshes.insert(spec["render"]["mesh"].get<std::string>());
+        }
+    }
+
     if (renderer && doc.contains("assets")) {
         const auto &assets = doc["assets"];
 
@@ -200,6 +212,10 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
 
         if (assets.contains("meshes")) {
             for (const auto &[name, spec] : assets["meshes"].items()) {
+                // Skip meshes not referenced by any enabled object.
+                if (!neededMeshes.empty() && neededMeshes.find(name) == neededMeshes.end())
+                    continue;
+
                 if (spec.is_object() && spec.contains("model")) {
                     // glTF/GLB model — load all sub-meshes + materials.
                     const std::string modelPath  = assetsDir + "/" + spec.at("model").get<std::string>();
@@ -236,6 +252,8 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
 
         auto &obj          = scene.createObject(name, parent);
         result.objects[name] = &obj;
+
+        obj.enabled = spec.value("enabled", true);
 
         // Transform
         if (spec.contains("position")) {
@@ -300,8 +318,8 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
             }
         }
 
-        // Render component (requires renderer + resolved assets)
-        if (renderer && spec.contains("render")) {
+        // Render component (requires renderer + resolved assets + object enabled)
+        if (renderer && obj.enabled && spec.contains("render")) {
             const auto &rc = spec["render"];
             const std::string meshName = rc.at("mesh").get<std::string>();
 

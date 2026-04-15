@@ -31,6 +31,7 @@ public:
     explicit GameObject(std::string name) : name(std::move(name)) {}
 
     std::string                       name;
+    bool                              enabled{true};
     Transform                         transform;
     std::optional<RenderComponent>    render;
     std::optional<LightComponent>     light;

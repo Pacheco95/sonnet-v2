@@ -55,6 +55,7 @@ struct LoadedScene {
 //     {
 //       "name":     "ObjectName",
 //       "parent":   "ParentName",           // optional
+//       "enabled":  false,                  // optional, default true; false skips render loading
 //       "position": [x, y, z],              // optional, default [0,0,0]
 //       "rotation": [x, y, z, w],           // optional quat, default identity
 //       "scale":    [x, y, z],              // optional, default [1,1,1]

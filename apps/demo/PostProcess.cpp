@@ -277,7 +277,7 @@ void PostProcess::buildGraph()
             m_params.scene->buildRenderQueue(queue);
             // Emissive indicator spheres for point lights without a render mesh.
             for (const auto &obj : m_params.scene->objects()) {
-                if (!obj->light || !obj->light->enabled) continue;
+                if (!obj->enabled || !obj->light || !obj->light->enabled) continue;
                 if (obj->light->type != sonnet::world::LightComponent::Type::Point) continue;
                 if (obj->render) continue;
                 MaterialInstance indMat{m_emissiveMatTmpl};

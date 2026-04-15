@@ -80,7 +80,7 @@ void Scene::destroyObject(GameObject *obj) {
 
 void Scene::buildRenderQueue(std::vector<api::render::RenderItem> &queue) const {
     for (const auto &obj : m_objects) {
-        if (!obj->render) continue;
+        if (!obj->enabled || !obj->render) continue;
         queue.push_back({
             .name        = obj->name,
             .mesh        = obj->render->mesh,

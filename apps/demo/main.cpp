@@ -229,12 +229,12 @@ int main() {
         scriptRuntime.update(dt);
 
         for (const auto &obj : scene.objects())
-            if (obj->animationPlayer)
+            if (obj->enabled && obj->animationPlayer)
                 obj->animationPlayer->update(dt);
 
         // Skinning bone palette upload (must run after animation players).
         for (const auto &obj : scene.objects()) {
-            if (!obj->skin || !obj->render) continue;
+            if (!obj->enabled || !obj->skin || !obj->render) continue;
             const auto &skin = *obj->skin;
             for (int bi = 0; bi < skin.numBones; ++bi) {
                 if (!skin.boneTransforms[bi]) continue;
@@ -264,7 +264,7 @@ int main() {
         sonnet::api::render::DirectionalLight ctxDirLight{};
         std::vector<sonnet::api::render::PointLight> ctxPointLights;
         for (const auto &obj : scene.objects()) {
-            if (!obj->light || !obj->light->enabled) continue;
+            if (!obj->enabled || !obj->light || !obj->light->enabled) continue;
             using LT = sonnet::world::LightComponent::Type;
             if (obj->light->type == LT::Directional) {
                 ctxDirLight = {obj->light->direction,

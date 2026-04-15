@@ -284,7 +284,7 @@ void EditorUI::doPickingPass(EditorParams &p, ImVec2 vpMin, ImVec2 vpSize,
     std::vector<sonnet::api::render::RenderItem> pickQueue;
     std::vector<sonnet::world::GameObject *>     pickObjects;
     for (const auto &o : m_scene.objects()) {
-        if (!o->render) continue;
+        if (!o->enabled || !o->render) continue;
         const int id = static_cast<int>(pickObjects.size()) + 1;
         const glm::vec3 col{
             float(id & 0xFF)         / 255.0f,
@@ -580,6 +580,8 @@ void EditorUI::drawInspectorPanel() {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.4f, 1.0f));
         ImGui::Text("%s", m_selectedObject->name.c_str());
         ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::Checkbox("##enabled", &m_selectedObject->enabled);
         ImGui::Separator();
 
         if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {

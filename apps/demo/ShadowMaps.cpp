@@ -123,7 +123,7 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
     // Shadow geometry queue (shared for all cascades).
     std::vector<RenderItem> shadowQueue;
     for (const auto &obj : scene.objects()) {
-        if (!obj->render) continue;
+        if (!obj->enabled || !obj->render) continue;
         shadowQueue.push_back({
             .mesh        = obj->render->mesh,
             .material    = *m_shadowMat,
@@ -191,7 +191,7 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
 
     std::vector<RenderItem> ptShadowQueue;
     for (const auto &obj : scene.objects()) {
-        if (!obj->render) continue;
+        if (!obj->enabled || !obj->render) continue;
         ptShadowQueue.push_back({
             .mesh        = obj->render->mesh,
             .material    = *m_ptShadowMat,
