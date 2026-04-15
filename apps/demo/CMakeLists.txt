@@ -3,6 +3,7 @@ add_executable(demo
     ShaderRegistry.cpp
     ShadowMaps.cpp
     RenderTargets.cpp
+    RenderGraph.cpp
     PostProcess.cpp
     EditorUI.cpp
 )

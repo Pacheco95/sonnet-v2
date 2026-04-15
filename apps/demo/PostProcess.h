@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IBL.h"
+#include "RenderGraph.h"
 #include "RenderTargets.h"
 #include "ShadowMaps.h"
 #include "ShaderRegistry.h"
@@ -81,6 +82,10 @@ public:
     sonnet::core::MaterialTemplateHandle pickingSkinnedMatTmpl{};
 
 private:
+    // (Re)build and compile the render graph from the current toggle state.
+    // Called automatically when structural toggles change.
+    void buildGraph();
+
     void fullscreenQuad(sonnet::api::render::MaterialInstance &mat,
                         const sonnet::api::render::FrameContext &ppCtx);
 
@@ -107,4 +112,18 @@ private:
     std::optional<sonnet::api::render::MaterialInstance> m_outlineMat;
     std::optional<sonnet::api::render::MaterialInstance> m_skyMat;
     std::optional<sonnet::api::render::MaterialInstance> m_deferredMat;
+
+    // Render graph (rebuilt when structural toggles change).
+    RenderGraph m_graph;
+
+    // Current frame params — written by execute(), read by pass callbacks.
+    PostProcessParams m_params{};
+
+    // Cached structural toggles (rebuild graph when any of these change).
+    bool m_cachedSsaoEnabled  = true;
+    bool m_cachedSsaoShow     = false;
+    bool m_cachedFxaaEnabled  = true;
+    bool m_cachedSsrEnabled   = true;
+    bool m_cachedHasSelection = false; // outlineEnabled && selectedObject != nullptr
+    bool m_graphBuilt         = false;
 };

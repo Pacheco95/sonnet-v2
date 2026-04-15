@@ -1,6 +1,7 @@
 #include "PostProcess.h"
 
 #include <sonnet/api/render/IRenderTarget.h>
+#include <sonnet/api/render/IRendererBackend.h>
 #include <sonnet/api/render/RenderItem.h>
 #include <sonnet/world/GameObject.h>
 
@@ -31,7 +32,8 @@ PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
     : m_renderer(renderer), m_backend(backend),
       m_rts(rts), m_shadows(shadows),
       m_quadMesh(quadMesh), m_sphereMesh(sphereMesh),
-      m_emissiveMatTmpl(emissiveMatTmpl)
+      m_emissiveMatTmpl(emissiveMatTmpl),
+      m_graph(renderer, backend)
 {
     const float maxLOD = static_cast<float>(ibl.prefilteredLODs - 1);
 
@@ -121,7 +123,7 @@ PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
     m_ssaoBlurMat.emplace(ssaoBlurTmpl);
     m_ssaoBlurMat->addTexture("uSSAOTexture", rts.ssaoTex);
 
-    // ── SSAO debug (show raw AO as grayscale) ─────────────────────────────────
+    // ── SSAO debug ────────────────────────────────────────────────────────────
     const auto ssaoShowShader = shaders.compile(
         DEMO_ASSETS_DIR "/shaders/ssao.vert",
         DEMO_ASSETS_DIR "/shaders/ssao_show.frag");
@@ -164,7 +166,7 @@ PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
     m_outlineMat.emplace(outlineTmpl);
     m_outlineMat->addTexture("uMask", rts.outlineMaskTex);
 
-    // ── Skybox ────────────────────────────────────────────────────────────────
+    // ── Sky ───────────────────────────────────────────────────────────────────
     const auto skyShader = shaders.compile(
         DEMO_ASSETS_DIR "/shaders/sky.vert",
         DEMO_ASSETS_DIR "/shaders/sky.frag");
@@ -202,7 +204,7 @@ PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
     m_deferredMat->set("uMaxPrefilteredLOD",   maxLOD);
     m_deferredMat->set("uPointShadowFarPlane", ShadowMaps::POINT_SHADOW_FAR);
 
-    // ── Picking materials (public — used by EditorUI) ─────────────────────────
+    // ── Picking (public — used by EditorUI) ───────────────────────────────────
     const auto pickingShader = shaders.compile(
         DEMO_ASSETS_DIR "/shaders/shadow.vert",
         DEMO_ASSETS_DIR "/shaders/picking.frag");
@@ -222,7 +224,10 @@ PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
     });
 }
 
-void PostProcess::fullscreenQuad(MaterialInstance &mat, const FrameContext &ppCtx) {
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+void PostProcess::fullscreenQuad(MaterialInstance &mat, const FrameContext &ppCtx)
+{
     const glm::mat4 identity{1.0f};
     std::vector<RenderItem> q{{
         .mesh        = m_quadMesh,
@@ -234,62 +239,302 @@ void PostProcess::fullscreenQuad(MaterialInstance &mat, const FrameContext &ppCt
     m_renderer.endFrame();
 }
 
-void PostProcess::execute(const PostProcessParams &p, const FrameContext &ctx) {
-    const glm::mat4 identity{1.0f};
-    const FrameContext ppCtx{
-        .viewMatrix       = identity,
-        .projectionMatrix = identity,
-        .viewPosition     = glm::vec3{0.0f},
-        .viewportWidth    = static_cast<std::uint32_t>(p.fbSize.x),
-        .viewportHeight   = static_cast<std::uint32_t>(p.fbSize.y),
-        .deltaTime        = 0.0f,
-    };
+// ── buildGraph ────────────────────────────────────────────────────────────────
+// Registers all passes into m_graph using the current toggle state in m_params.
+// Sky and outline composite are folded into the "Deferred" pass so that hdrRT
+// has exactly one declared writer, keeping downstream read dependencies clean.
+void PostProcess::buildGraph()
+{
+    m_graph.reset();
 
-    // ── Pass 1.5: G-buffer ────────────────────────────────────────────────────
-    m_renderer.bindRenderTarget(m_rts.gbufRT);
-    m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                          static_cast<std::uint32_t>(p.fbSize.y));
-    glDepthMask(GL_TRUE);
-    m_backend.clear({
-        .colors = {
-            {0, {0.0f, 0.0f, 0.0f, 1.0f}},
-            {1, {0.0f, 0.0f, 0.0f, 1.0f}},
-            {2, {0.0f, 0.0f, 0.0f, 1.0f}},
+    // Register the tex→RT source mapping so the graph can resolve reads.
+    m_graph.registerTexSource(m_rts.gbufRT,        m_rts.gbufAlbedoRoughTex);
+    m_graph.registerTexSource(m_rts.gbufRT,        m_rts.gbufNormalMetallicTex);
+    m_graph.registerTexSource(m_rts.gbufRT,        m_rts.gbufEmissiveAOTex);
+    m_graph.registerTexSource(m_rts.gbufRT,        m_rts.gbufDepthTex);
+    m_graph.registerTexSource(m_rts.hdrRT,         m_rts.hdrTex);
+    m_graph.registerTexSource(m_rts.ssaoRT,        m_rts.ssaoTex);
+    m_graph.registerTexSource(m_rts.ssaoBlurRT,    m_rts.ssaoBlurTex);
+    m_graph.registerTexSource(m_rts.bloomBrightRT, m_rts.bloomBrightTex);
+    m_graph.registerTexSource(m_rts.bloomBlurRT,   m_rts.bloomBlurTex);
+    m_graph.registerTexSource(m_rts.ssrRT,         m_rts.ssrTex);
+    m_graph.registerTexSource(m_rts.outlineMaskRT, m_rts.outlineMaskTex);
+    m_graph.registerTexSource(m_rts.ldrRT,         m_rts.ldrTex);
+    m_graph.registerTexSource(m_rts.viewportRT,    m_rts.viewportTex);
+
+    // ── GBuffer ───────────────────────────────────────────────────────────────
+    m_graph.addPass("GBuffer",
+        /*reads=*/ {},
+        m_rts.gbufRT,
+        RGClearDesc{
+            .colors = {{0,{0,0,0,1}},{1,{0,0,0,1}},{2,{0,0,0,1}}},
+            .depth  = 1.0f,
         },
-        .depth = 1.0f,
-    });
-    if (p.scene) {
-        std::vector<RenderItem> gbufQueue;
-        p.scene->buildRenderQueue(gbufQueue);
+        /*isOutput=*/ false,
+        [this](const FrameContext &ctx, const FrameContext &) {
+            if (!m_params.scene) return;
+            std::vector<RenderItem> queue;
+            m_params.scene->buildRenderQueue(queue);
+            // Emissive indicator spheres for point lights without a render mesh.
+            for (const auto &obj : m_params.scene->objects()) {
+                if (!obj->light || !obj->light->enabled) continue;
+                if (obj->light->type != sonnet::world::LightComponent::Type::Point) continue;
+                if (obj->render) continue;
+                MaterialInstance indMat{m_emissiveMatTmpl};
+                indMat.set("uEmissiveColor",    obj->light->color);
+                indMat.set("uEmissiveStrength", obj->light->intensity);
+                const glm::mat4 model =
+                    glm::translate(glm::mat4{1.0f}, obj->transform.getWorldPosition()) *
+                    glm::scale(glm::mat4{1.0f}, glm::vec3{0.08f});
+                queue.push_back({
+                    .mesh        = m_sphereMesh,
+                    .material    = indMat,
+                    .modelMatrix = model,
+                });
+            }
+            m_renderer.beginFrame();
+            m_renderer.render(ctx, queue);
+            m_renderer.endFrame();
+        });
 
-        // Emissive indicator spheres for point lights without a render component.
-        for (const auto &obj : p.scene->objects()) {
-            if (!obj->light || !obj->light->enabled) continue;
-            if (obj->light->type != sonnet::world::LightComponent::Type::Point) continue;
-            if (obj->render) continue;
-            MaterialInstance indMat{m_emissiveMatTmpl};
-            indMat.set("uEmissiveColor",    obj->light->color);
-            indMat.set("uEmissiveStrength", obj->light->intensity);
-            const glm::mat4 model =
-                glm::translate(glm::mat4{1.0f}, obj->transform.getWorldPosition()) *
-                glm::scale(glm::mat4{1.0f}, glm::vec3{0.08f});
-            gbufQueue.push_back({
-                .mesh        = m_sphereMesh,
-                .material    = indMat,
-                .modelMatrix = model,
+    // ── SSAO (or white fill when disabled) ────────────────────────────────────
+    if (m_params.ssaoEnabled) {
+        m_graph.addPass("SSAO",
+            {m_rts.gbufNormalMetallicTex, m_rts.gbufDepthTex},
+            m_rts.ssaoRT,
+            RGClearDesc{.colors = {{0,{1,1,1,1}}}},
+            false,
+            [this](const FrameContext &, const FrameContext &ppCtx) {
+                fullscreenQuad(*m_ssaoMat, ppCtx);
             });
-        }
-        m_renderer.beginFrame();
-        m_renderer.render(ctx, gbufQueue);
-        m_renderer.endFrame();
+
+        m_graph.addPass("SSAOBlur",
+            {m_rts.ssaoTex},
+            m_rts.ssaoBlurRT,
+            RGClearDesc{.colors = {{0,{1,1,1,1}}}},
+            false,
+            [this](const FrameContext &, const FrameContext &ppCtx) {
+                fullscreenQuad(*m_ssaoBlurMat, ppCtx);
+            });
+    } else {
+        m_graph.addPass("SSAODisabled",
+            {},
+            m_rts.ssaoBlurRT,
+            RGClearDesc{.colors = {{0,{1,1,1,1}}}},
+            false,
+            [](const FrameContext &, const FrameContext &) {});
     }
 
-    // ── Pass 1.6 / 1.7: SSAO ─────────────────────────────────────────────────
+    // ── Deferred lighting + Sky (and inline outline when enabled) ─────────────
+    // Sky and outline composite are folded here so hdrRT has exactly one
+    // declared writer — downstream passes (SSR, BloomBright) always depend
+    // on a single Deferred node, regardless of which overlays are active.
+    m_graph.addPass("Deferred",
+        {m_rts.gbufAlbedoRoughTex, m_rts.gbufNormalMetallicTex,
+         m_rts.gbufEmissiveAOTex,  m_rts.gbufDepthTex, m_rts.ssaoBlurTex},
+        m_rts.hdrRT,
+        RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+        false,
+        [this](const FrameContext &ctx, const FrameContext &ppCtx) {
+            const glm::mat4 identity{1.0f};
+
+            // Deferred lighting quad
+            std::vector<RenderItem> dq{{
+                .mesh = m_quadMesh, .material = *m_deferredMat, .modelMatrix = identity,
+            }};
+            m_renderer.beginFrame();
+            m_renderer.render(ctx, dq);
+            m_renderer.endFrame();
+
+            // Sky (reads gDepth; discards fragments where geometry depth < 1.0)
+            std::vector<RenderItem> skyQ{{
+                .mesh = m_quadMesh, .material = *m_skyMat, .modelMatrix = identity,
+            }};
+            m_renderer.beginFrame();
+            m_renderer.render(ctx, skyQ);
+            m_renderer.endFrame();
+
+            // Outline mask + composite (when a selection is active)
+            if (m_params.outlineEnabled && m_params.selectedObject && m_params.scene) {
+                // Build outline geometry queue for selected object subtree.
+                std::vector<RenderItem> outlineQueue;
+                std::function<void(const sonnet::world::GameObject &)> collect =
+                    [&](const sonnet::world::GameObject &obj) {
+                        if (obj.render) {
+                            if (obj.skin) {
+                                MaterialInstance skinnedMat{m_outlineMaskSkinnedMatTmpl};
+                                for (const auto &[name, val] : obj.render->material.values())
+                                    if (name.rfind("uBoneMatrices", 0) == 0)
+                                        skinnedMat.set(name, val);
+                                outlineQueue.push_back({
+                                    .mesh        = obj.render->mesh,
+                                    .material    = skinnedMat,
+                                    .modelMatrix = obj.transform.getModelMatrix(),
+                                });
+                            } else {
+                                outlineQueue.push_back({
+                                    .mesh        = obj.render->mesh,
+                                    .material    = *m_outlineMaskMat,
+                                    .modelMatrix = obj.transform.getModelMatrix(),
+                                });
+                            }
+                        }
+                        for (auto *tf : obj.transform.children())
+                            for (const auto &o : m_params.scene->objects())
+                                if (&o->transform == tf) { collect(*o); break; }
+                    };
+                collect(*m_params.selectedObject);
+
+                // Render mask to outlineMaskRT
+                m_renderer.bindRenderTarget(m_rts.outlineMaskRT);
+                m_backend.setViewport(
+                    static_cast<std::uint32_t>(m_params.fbSize.x),
+                    static_cast<std::uint32_t>(m_params.fbSize.y));
+                m_backend.clear({.colors = {{0u, glm::vec4{0,0,0,1}}}});
+                m_renderer.beginFrame();
+                m_renderer.render(ctx, outlineQueue);
+                m_renderer.endFrame();
+
+                // Composite outline edge onto hdrRT (alpha blend)
+                m_renderer.bindRenderTarget(m_rts.hdrRT);
+                m_backend.setViewport(
+                    static_cast<std::uint32_t>(m_params.fbSize.x),
+                    static_cast<std::uint32_t>(m_params.fbSize.y));
+                m_outlineMat->set("uOutlineColor", m_params.outlineColor);
+                fullscreenQuad(*m_outlineMat, ppCtx);
+            }
+        });
+
+    // ── SSR (or black fill when disabled) ─────────────────────────────────────
+    if (m_params.ssrEnabled) {
+        m_graph.addPass("SSR",
+            {m_rts.gbufDepthTex, m_rts.gbufNormalMetallicTex,
+             m_rts.gbufAlbedoRoughTex, m_rts.hdrTex},
+            m_rts.ssrRT,
+            RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+            false,
+            [this](const FrameContext &, const FrameContext &ppCtx) {
+                fullscreenQuad(*m_ssrMat, ppCtx);
+            });
+    } else {
+        m_graph.addPass("SSRDisabled",
+            {},
+            m_rts.ssrRT,
+            RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+            false,
+            [](const FrameContext &, const FrameContext &) {});
+    }
+
+    // ── Bloom bright-pass ─────────────────────────────────────────────────────
+    m_graph.addPass("BloomBright",
+        {m_rts.hdrTex},
+        m_rts.bloomBrightRT,
+        RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+        false,
+        [this](const FrameContext &, const FrameContext &ppCtx) {
+            fullscreenQuad(*m_bloomBrightMat, ppCtx);
+        });
+
+    // ── Bloom blur (ping-pong; final result ends up in bloomBrightRT) ──────────
+    // Declares writesRT=bloomBlurRT (first writer) so downstream passes that
+    // read bloomBlurTex depend on this node and are scheduled after it.
+    // Tonemap additionally reads bloomBlurTex to enforce ordering after this pass.
+    m_graph.addPass("BloomBlur",
+        {m_rts.bloomBrightTex},
+        m_rts.bloomBlurRT,
+        RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+        false,
+        [this](const FrameContext &, const FrameContext &ppCtx) {
+            // Graph has already bound and cleared bloomBlurRT for the first H pass.
+            for (int i = 0; i < m_params.bloomIterations; ++i) {
+                if (i > 0) {
+                    // Re-bind for subsequent H passes.
+                    m_renderer.bindRenderTarget(m_rts.bloomBlurRT);
+                    m_backend.setViewport(ppCtx.viewportWidth, ppCtx.viewportHeight);
+                    m_backend.clear({.colors = {{0u, glm::vec4{0,0,0,1}}}});
+                }
+                fullscreenQuad(*m_bloomBlurHMat, ppCtx); // H: bloomBright → bloomBlur
+
+                m_renderer.bindRenderTarget(m_rts.bloomBrightRT);
+                m_backend.setViewport(ppCtx.viewportWidth, ppCtx.viewportHeight);
+                m_backend.clear({.colors = {{0u, glm::vec4{0,0,0,1}}}});
+                fullscreenQuad(*m_bloomBlurVMat, ppCtx); // V: bloomBlur  → bloomBright
+            }
+            // Final blurred bloom is now in bloomBrightRT.
+        });
+
+    // ── Final output: SSAOShow / Tonemap+FXAA / Tonemap alone ─────────────────
+    if (m_params.ssaoShow) {
+        // Debug view: show raw AO buffer. All other post-process passes are culled.
+        m_graph.addPass("SSAOShow",
+            {m_rts.ssaoBlurTex},
+            m_rts.viewportRT,
+            RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+            /*isOutput=*/ true,
+            [this](const FrameContext &, const FrameContext &ppCtx) {
+                fullscreenQuad(*m_ssaoShowMat, ppCtx);
+            });
+    } else if (m_params.fxaaEnabled) {
+        m_graph.addPass("Tonemap",
+            // Extra read of bloomBlurTex forces ordering after BloomBlur
+            // (final bloom is in bloomBrightRT but BloomBlur declared bloomBlurRT).
+            {m_rts.hdrTex, m_rts.bloomBrightTex, m_rts.ssrTex, m_rts.bloomBlurTex},
+            m_rts.ldrRT,
+            RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+            false,
+            [this](const FrameContext &, const FrameContext &ppCtx) {
+                fullscreenQuad(*m_tonemapMat, ppCtx);
+            });
+
+        m_graph.addPass("FXAA",
+            {m_rts.ldrTex},
+            m_rts.viewportRT,
+            RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+            /*isOutput=*/ true,
+            [this](const FrameContext &, const FrameContext &ppCtx) {
+                fullscreenQuad(*m_fxaaMat, ppCtx);
+            });
+    } else {
+        m_graph.addPass("Tonemap",
+            {m_rts.hdrTex, m_rts.bloomBrightTex, m_rts.ssrTex, m_rts.bloomBlurTex},
+            m_rts.viewportRT,
+            RGClearDesc{.colors = {{0,{0,0,0,1}}}},
+            /*isOutput=*/ true,
+            [this](const FrameContext &, const FrameContext &ppCtx) {
+                fullscreenQuad(*m_tonemapMat, ppCtx);
+            });
+    }
+
+    m_graph.compile();
+}
+
+// ── execute ───────────────────────────────────────────────────────────────────
+
+void PostProcess::execute(const PostProcessParams &p, const FrameContext &ctx)
+{
+    // Store current-frame params; pass callbacks read from m_params.
+    m_params = p;
+
+    // Rebuild the graph when any structural toggle changes.
+    const bool hasSelection = p.outlineEnabled && p.selectedObject != nullptr;
+    if (!m_graphBuilt         ||
+        p.ssaoEnabled != m_cachedSsaoEnabled ||
+        p.ssaoShow    != m_cachedSsaoShow    ||
+        p.fxaaEnabled != m_cachedFxaaEnabled ||
+        p.ssrEnabled  != m_cachedSsrEnabled  ||
+        hasSelection  != m_cachedHasSelection)
+    {
+        m_cachedSsaoEnabled  = p.ssaoEnabled;
+        m_cachedSsaoShow     = p.ssaoShow;
+        m_cachedFxaaEnabled  = p.fxaaEnabled;
+        m_cachedSsrEnabled   = p.ssrEnabled;
+        m_cachedHasSelection = hasSelection;
+        m_graphBuilt = true;
+        buildGraph();
+    }
+
+    // ── Per-frame uniform uploads ─────────────────────────────────────────────
     if (p.ssaoEnabled) {
-        m_renderer.bindRenderTarget(m_rts.ssaoRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
         m_ssaoMat->set("uView",          p.viewMat);
         m_ssaoMat->set("uProjection",    p.projMat);
         m_ssaoMat->set("uInvProjection", p.invProjMat);
@@ -298,108 +543,20 @@ void PostProcess::execute(const PostProcessParams &p, const FrameContext &ctx) {
             static_cast<float>(p.fbSize.y) / 4.0f});
         m_ssaoMat->set("uRadius", p.ssaoRadius);
         m_ssaoMat->set("uBias",   p.ssaoBias);
-        fullscreenQuad(*m_ssaoMat, ppCtx);
-
-        m_renderer.bindRenderTarget(m_rts.ssaoBlurRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
-        fullscreenQuad(*m_ssaoBlurMat, ppCtx);
-    } else {
-        m_renderer.bindRenderTarget(m_rts.ssaoBlurRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {1.0f, 1.0f, 1.0f, 1.0f}}} });
     }
-
-    // ── Pass 2: Deferred lighting ─────────────────────────────────────────────
-    m_renderer.bindRenderTarget(m_rts.hdrRT);
-    m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                          static_cast<std::uint32_t>(p.fbSize.y));
-    m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
     {
         const glm::mat4 invViewProj = glm::inverse(p.projMat * p.viewMat);
-        m_deferredMat->set("uInvViewProj", invViewProj);
-        m_deferredMat->set("uShadowBias",  p.shadowBias);
-        m_deferredMat->set("uPointShadowCount", p.shadowLightCount);
-        m_deferredMat->set("uPointShadowBias",  p.pointShadowBias);
+        m_deferredMat->set("uInvViewProj",       invViewProj);
+        m_deferredMat->set("uShadowBias",        p.shadowBias);
+        m_deferredMat->set("uPointShadowCount",  p.shadowLightCount);
+        m_deferredMat->set("uPointShadowBias",   p.pointShadowBias);
         for (int c = 0; c < ShadowMaps::NUM_CASCADES; ++c) {
             m_deferredMat->set("uCSMLightSpaceMats[" + std::to_string(c) + "]",
                                m_shadows.csmLightSpaceMats()[c]);
             m_deferredMat->set("uCSMSplitDepths["   + std::to_string(c) + "]",
                                m_shadows.csmSplitDepths()[c]);
         }
-        std::vector<RenderItem> dq{{
-            .mesh        = m_quadMesh,
-            .material    = *m_deferredMat,
-            .modelMatrix = identity,
-        }};
-        m_renderer.beginFrame();
-        m_renderer.render(ctx, dq);
-        m_renderer.endFrame();
     }
-
-    // ── Pass 2.1: Sky ─────────────────────────────────────────────────────────
-    {
-        std::vector<RenderItem> skyQ{{
-            .mesh = m_quadMesh, .material = *m_skyMat, .modelMatrix = identity,
-        }};
-        m_renderer.beginFrame();
-        m_renderer.render(ctx, skyQ);
-        m_renderer.endFrame();
-    }
-
-    // ── Pass 2.15: Selection outline mask ─────────────────────────────────────
-    if (p.outlineEnabled && p.selectedObject && p.scene) {
-        std::vector<RenderItem> outlineQueue;
-        std::function<void(const sonnet::world::GameObject &)> collectSubtree =
-            [&](const sonnet::world::GameObject &obj) {
-                if (obj.render) {
-                    if (obj.skin) {
-                        MaterialInstance skinnedMat{m_outlineMaskSkinnedMatTmpl};
-                        for (const auto &[name, val] : obj.render->material.values())
-                            if (name.rfind("uBoneMatrices", 0) == 0)
-                                skinnedMat.set(name, val);
-                        outlineQueue.push_back({
-                            .mesh        = obj.render->mesh,
-                            .material    = skinnedMat,
-                            .modelMatrix = obj.transform.getModelMatrix(),
-                        });
-                    } else {
-                        outlineQueue.push_back({
-                            .mesh        = obj.render->mesh,
-                            .material    = *m_outlineMaskMat,
-                            .modelMatrix = obj.transform.getModelMatrix(),
-                        });
-                    }
-                }
-                for (auto *childTf : obj.transform.children()) {
-                    for (const auto &o : p.scene->objects())
-                        if (&o->transform == childTf) { collectSubtree(*o); break; }
-                }
-            };
-        collectSubtree(*p.selectedObject);
-
-        m_renderer.bindRenderTarget(m_rts.outlineMaskRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-        m_renderer.beginFrame();
-        m_renderer.render(ctx, outlineQueue);
-        m_renderer.endFrame();
-
-        m_renderer.bindRenderTarget(m_rts.hdrRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_outlineMat->set("uOutlineColor", p.outlineColor);
-        fullscreenQuad(*m_outlineMat, ppCtx);
-    }
-
-    // ── Pass 2.2: SSR ─────────────────────────────────────────────────────────
-    m_renderer.bindRenderTarget(m_rts.ssrRT);
-    m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                          static_cast<std::uint32_t>(p.fbSize.y));
-    m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
     if (p.ssrEnabled) {
         m_ssrMat->set("uProjection",    p.projMat);
         m_ssrMat->set("uInvProjection", p.invProjMat);
@@ -411,61 +568,15 @@ void PostProcess::execute(const PostProcessParams &p, const FrameContext &ctx) {
         m_ssrMat->set("uThickness",    p.ssrThickness);
         m_ssrMat->set("uMaxDistance",  p.ssrMaxDistance);
         m_ssrMat->set("uRoughnessMax", p.ssrRoughnessMax);
-        fullscreenQuad(*m_ssrMat, ppCtx);
     }
-
-    // ── Pass 2.5: Bloom ───────────────────────────────────────────────────────
-    m_renderer.bindRenderTarget(m_rts.bloomBrightRT);
-    m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                          static_cast<std::uint32_t>(p.fbSize.y));
-    m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
     m_bloomBrightMat->set("uBloomThreshold", p.bloomThreshold);
-    fullscreenQuad(*m_bloomBrightMat, ppCtx);
-
-    for (int i = 0; i < p.bloomIterations; ++i) {
-        m_renderer.bindRenderTarget(m_rts.bloomBlurRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-        fullscreenQuad(*m_bloomBlurHMat, ppCtx);
-
-        m_renderer.bindRenderTarget(m_rts.bloomBrightRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-        fullscreenQuad(*m_bloomBlurVMat, ppCtx);
-    }
-
     m_tonemapMat->set("uExposure",       p.exposure);
     m_tonemapMat->set("uBloomIntensity", p.bloomIntensity);
     m_tonemapMat->set("uSSRStrength",    p.ssrEnabled ? p.ssrStrength : 0.0f);
-
-    // ── Pass 3 / 4: Tone-map + optional FXAA → viewportRT ────────────────────
-    if (p.ssaoShow) {
-        m_renderer.bindRenderTarget(m_rts.viewportRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-        fullscreenQuad(*m_ssaoShowMat, ppCtx);
-    } else if (p.fxaaEnabled) {
-        m_renderer.bindRenderTarget(m_rts.ldrRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-        fullscreenQuad(*m_tonemapMat, ppCtx);
-
-        m_renderer.bindRenderTarget(m_rts.viewportRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
+    if (p.fxaaEnabled) {
         m_fxaaMat->set("uTexelSize", glm::vec2(1.0f / static_cast<float>(p.fbSize.x),
                                                1.0f / static_cast<float>(p.fbSize.y)));
-        fullscreenQuad(*m_fxaaMat, ppCtx);
-    } else {
-        m_renderer.bindRenderTarget(m_rts.viewportRT);
-        m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
-                              static_cast<std::uint32_t>(p.fbSize.y));
-        m_backend.clear({ .colors = {{0, {0.0f, 0.0f, 0.0f, 1.0f}}} });
-        fullscreenQuad(*m_tonemapMat, ppCtx);
     }
+
+    m_graph.execute(ctx, p.fbSize);
 }
