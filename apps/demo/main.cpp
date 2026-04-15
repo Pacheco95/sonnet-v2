@@ -737,16 +737,7 @@ int main() {
 
     // Tweakable state exposed via ImGui.
     float     rotationSpeed  = 45.0f;
-    // Directional light — seeded from scene.json; falls back to defaults.
-    glm::vec3 lightDir       = loaded.directionalLights.empty()
-                                   ? glm::vec3{0.6f, 1.0f, 0.4f}
-                                   : loaded.directionalLights[0].direction;
-    glm::vec3 lightColor     = loaded.directionalLights.empty()
-                                   ? glm::vec3{1.0f, 1.0f, 1.0f}
-                                   : loaded.directionalLights[0].color;
-    float     lightIntensity = loaded.directionalLights.empty()
-                                   ? 1.0f
-                                   : loaded.directionalLights[0].intensity;
+    // Lights are now owned by scene objects' LightComponent — no separate variables needed.
     float     exposure        = 1.0f;
     float     shadowBias      = 0.005f;
     float     bloomThreshold  = 0.8f;
@@ -769,31 +760,7 @@ int main() {
     float     pointShadowBias = 0.008f;
     bool      viewportFocused = false; // updated each frame from ImGui, used next frame
 
-    // Per-object PBR scalar multipliers — applied on top of the ORM texture.
-    // 1.0 = let the texture drive everything.
-    float cubeMetallic      = 1.0f;
-    float cubeRoughness     = 1.0f;
-    float floorMetallic     = 1.0f;
-    float floorRoughness    = 1.0f;
-
-    // ── Editable point lights ─────────────────────────────────────────────────
-    // Light 0 is the lamp sphere — position tracks lamp.transform, color/strength
-    // also drive the emissive material.  Remaining lights are freely placed.
-    struct PointLightEdit {
-        glm::vec3 color{1.0f, 1.0f, 1.0f};
-        float     intensity{3.0f};
-        glm::vec3 position{0.0f}; // ignored for light 0 (uses lamp transform)
-        bool      enabled{true};
-    };
-    std::vector<PointLightEdit> pointLights;
-    // Seed from scene.json loaded lights.
-    for (const auto &pl : loaded.pointLights) {
-        pointLights.push_back({
-            .color     = pl.color,
-            .intensity = pl.intensity,
-            .position  = pl.position,
-        });
-    }
+    // (Light and PBR properties are now owned by scene object components.)
 
     float  rotation = 0.0f;
     double prevTime = glfwGetTime();
@@ -923,6 +890,14 @@ int main() {
         }
 
         // Light-view matrix (shared across all cascades).
+        // Find the directional light direction from scene objects.
+        glm::vec3 lightDir{0.6f, 1.0f, 0.4f}; // fallback
+        for (const auto &obj : scene.objects()) {
+            if (obj->light && obj->light->type == sonnet::world::LightComponent::Type::Directional) {
+                lightDir = obj->light->direction;
+                break;
+            }
+        }
         const glm::vec3 lightDirNorm = glm::normalize(lightDir);
         const glm::vec3 lightUp = std::abs(lightDirNorm.y) > 0.99f
                                 ? glm::vec3{0.0f, 0.0f, 1.0f}
@@ -1020,29 +995,30 @@ int main() {
             renderer.endFrame();
         };
 
-        // ── Per-frame material updates ─────────────────────────────────────────
-        cubeMat.set("uMetallic",    cubeMetallic);
-        cubeMat.set("uRoughness",   cubeRoughness);
-        floorMat.set("uMetallic",   floorMetallic);
-        floorMat.set("uRoughness",  floorRoughness);
-        // Light 0 drives the lamp sphere's emissive visual.
-        if (!pointLights.empty()) {
-            lampMat.set("uEmissiveColor",    pointLights[0].color);
-            lampMat.set("uEmissiveStrength", pointLights[0].intensity);
+        // ── Sync lamp emissive material with its LightComponent ───────────────
+        if (lamp.light) {
+            lampMat.set("uEmissiveColor",    lamp.light->color);
+            lampMat.set("uEmissiveStrength", lamp.light->intensity);
         }
 
-        // Build the PointLight array for the deferred lighting pass.
-        const glm::vec3 lampPos = lamp.transform.getWorldPosition();
+        // ── Collect lights from scene objects ─────────────────────────────────
+        sonnet::api::render::DirectionalLight ctxDirLight{};
         std::vector<sonnet::api::render::PointLight> ctxPointLights;
-        for (int i = 0; i < static_cast<int>(pointLights.size()); ++i) {
-            if (!pointLights[i].enabled) continue;
-            const glm::vec3 pos = (i == 0) ? lampPos : pointLights[i].position;
-            ctxPointLights.push_back({
-                .position  = pos,
-                .color     = pointLights[i].color,
-                .intensity = pointLights[i].intensity,
-            });
-            if (ctxPointLights.size() >= 8) break; // clamp to shader MAX_POINT_LIGHTS
+        for (const auto &obj : scene.objects()) {
+            if (!obj->light || !obj->light->enabled) continue;
+            using LT = sonnet::world::LightComponent::Type;
+            if (obj->light->type == LT::Directional) {
+                ctxDirLight = { obj->light->direction,
+                                obj->light->color,
+                                obj->light->intensity };
+            } else {
+                ctxPointLights.push_back({
+                    .position  = obj->transform.getWorldPosition(),
+                    .color     = obj->light->color,
+                    .intensity = obj->light->intensity,
+                });
+                if (ctxPointLights.size() >= 8) break;
+            }
         }
 
         sonnet::api::render::FrameContext ctx{
@@ -1052,11 +1028,7 @@ int main() {
             .viewportWidth    = fbSize.x,
             .viewportHeight   = fbSize.y,
             .deltaTime        = dt,
-            .directionalLight = sonnet::api::render::DirectionalLight{
-                .direction = lightDir,
-                .color     = lightColor,
-                .intensity = lightIntensity,
-            },
+            .directionalLight = ctxDirLight,
             .pointLights      = ctxPointLights,
         };
 
@@ -1147,14 +1119,17 @@ int main() {
             std::vector<sonnet::api::render::RenderItem> gbufQueue;
             scene.buildRenderQueue(gbufQueue);
 
-            // Add small emissive indicator spheres for lights 1+ (light 0 is the lamp sphere).
-            for (int i = 1; i < static_cast<int>(pointLights.size()); ++i) {
-                if (!pointLights[i].enabled) continue;
+            // Add small emissive indicator spheres for point lights without
+            // their own render component (i.e. not the lamp sphere).
+            for (const auto &obj : scene.objects()) {
+                if (!obj->light || !obj->light->enabled) continue;
+                if (obj->light->type != sonnet::world::LightComponent::Type::Point) continue;
+                if (obj->render) continue; // has its own visible mesh
                 sonnet::api::render::MaterialInstance indMat{emissiveMatTemplate};
-                indMat.set("uEmissiveColor",    pointLights[i].color);
-                indMat.set("uEmissiveStrength", pointLights[i].intensity);
+                indMat.set("uEmissiveColor",    obj->light->color);
+                indMat.set("uEmissiveStrength", obj->light->intensity);
                 const glm::mat4 model =
-                    glm::translate(glm::mat4{1.0f}, pointLights[i].position) *
+                    glm::translate(glm::mat4{1.0f}, obj->transform.getWorldPosition()) *
                     glm::scale(glm::mat4{1.0f}, glm::vec3{0.08f});
                 gbufQueue.push_back({
                     .mesh        = sphereMeshHandle,
@@ -1816,19 +1791,86 @@ int main() {
             // ── Render component ───────────────────────────────────────────────
             if (selectedObject->render) {
                 if (ImGui::CollapsingHeader("Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::TextDisabled("Mesh handle:     %llu",
-                        static_cast<unsigned long long>(selectedObject->render->mesh.value));
-                    ImGui::TextDisabled("Material handle: %llu",
-                        static_cast<unsigned long long>(
-                            selectedObject->render->material.templateHandle().value));
+                    auto &mat = selectedObject->render->material;
+                    ImGui::TextDisabled("Material: %llu",
+                        static_cast<unsigned long long>(mat.templateHandle().value));
 
-                    // Editable PBR scalars for the Cube and Floor objects.
-                    if (selectedObject == &cube) {
-                        ImGui::SliderFloat("Metallic##cube",  &cubeMetallic,  0.0f, 1.0f);
-                        ImGui::SliderFloat("Roughness##cube", &cubeRoughness, 0.0f, 1.0f);
-                    } else if (selectedObject == &floor) {
-                        ImGui::SliderFloat("Metallic##floor",  &floorMetallic,  0.0f, 1.0f);
-                        ImGui::SliderFloat("Roughness##floor", &floorRoughness, 0.0f, 1.0f);
+                    const auto *tmpl = renderer.getMaterial(mat.templateHandle());
+                    if (tmpl) {
+                        // Heuristic: does this uniform name look like a colour?
+                        auto isColor = [](const std::string &n) {
+                            for (const char *k : {"Color","color","Colour","colour",
+                                                   "Albedo","albedo","Emissive","emissive",
+                                                   "Tint","tint"})
+                                if (n.find(k) != std::string::npos) return true;
+                            return false;
+                        };
+
+                        // Visitor: show an editable widget and write back on change.
+                        auto showUniform = [&](const std::string &name,
+                                               const sonnet::core::UniformValue &val) {
+                            ImGui::PushID(name.c_str());
+                            std::visit([&](auto &&v) {
+                                using T = std::decay_t<decltype(v)>;
+                                if constexpr (std::is_same_v<T, float>) {
+                                    float fv = v;
+                                    float hi = (name.find("Strength") != std::string::npos ||
+                                                name.find("strength") != std::string::npos) ? 20.0f
+                                             : (name.find("Bias") != std::string::npos)     ? 0.05f
+                                             : 1.0f;
+                                    if (ImGui::SliderFloat(name.c_str(), &fv, 0.0f, hi))
+                                        mat.set(name, fv);
+                                } else if constexpr (std::is_same_v<T, glm::vec3>) {
+                                    glm::vec3 cv = v;
+                                    bool changed = isColor(name)
+                                        ? ImGui::ColorEdit3(name.c_str(), &cv.x)
+                                        : ImGui::DragFloat3(name.c_str(), &cv.x, 0.01f);
+                                    if (changed) mat.set(name, cv);
+                                } else if constexpr (std::is_same_v<T, glm::vec4>) {
+                                    glm::vec4 cv = v;
+                                    bool changed = isColor(name)
+                                        ? ImGui::ColorEdit4(name.c_str(), &cv.x)
+                                        : ImGui::DragFloat4(name.c_str(), &cv.x, 0.01f);
+                                    if (changed) mat.set(name, cv);
+                                }
+                                // mat4 and Sampler are not user-editable
+                            }, val);
+                            ImGui::PopID();
+                        };
+
+                        // Show template defaults (skip bone matrices and samplers).
+                        for (const auto &[name, defVal] : tmpl->defaultValues) {
+                            if (std::holds_alternative<glm::mat4>(defVal)) continue;
+                            if (std::holds_alternative<sonnet::core::Sampler>(defVal)) continue;
+                            if (name.rfind("uBone", 0) == 0) continue;
+                            // Prefer per-instance override for display.
+                            const auto *inst = mat.tryGet(name);
+                            showUniform(name, inst ? *inst : defVal);
+                        }
+                        // Instance-only overrides not in template defaults.
+                        for (const auto &[name, instVal] : mat.values()) {
+                            if (tmpl->defaultValues.count(name)) continue;
+                            if (std::holds_alternative<glm::mat4>(instVal)) continue;
+                            if (std::holds_alternative<sonnet::core::Sampler>(instVal)) continue;
+                            if (name.rfind("uBone", 0) == 0) continue;
+                            showUniform(name, instVal);
+                        }
+                    }
+                }
+            }
+
+            // ── Light component ────────────────────────────────────────────────
+            if (selectedObject->light) {
+                if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    auto &lc = *selectedObject->light;
+                    ImGui::Checkbox("Enabled", &lc.enabled);
+                    ImGui::ColorEdit3("Color", &lc.color.x);
+                    using LT = sonnet::world::LightComponent::Type;
+                    if (lc.type == LT::Directional) {
+                        ImGui::DragFloat3("Direction", &lc.direction.x, 0.01f, -1.0f, 1.0f);
+                        ImGui::SliderFloat("Intensity", &lc.intensity, 0.0f, 4.0f);
+                    } else {
+                        ImGui::SliderFloat("Intensity", &lc.intensity, 0.0f, 20.0f);
                     }
                 }
             }
@@ -1908,39 +1950,36 @@ int main() {
         ImGui::Begin("Render Settings");
 
         if (ImGui::CollapsingHeader("Directional Light")) {
-            ImGui::DragFloat3("Direction",      &lightDir.x,      0.01f, -1.0f, 1.0f);
-            ImGui::ColorEdit3("Color##sun",     &lightColor.x);
-            ImGui::SliderFloat("Intensity##sun",&lightIntensity,  0.0f,  4.0f);
+            using LT = sonnet::world::LightComponent::Type;
+            for (const auto &obj : scene.objects()) {
+                if (!obj->light || obj->light->type != LT::Directional) continue;
+                auto &lc = *obj->light;
+                ImGui::DragFloat3("Direction",       &lc.direction.x, 0.01f, -1.0f, 1.0f);
+                ImGui::ColorEdit3("Color##sun",      &lc.color.x);
+                ImGui::SliderFloat("Intensity##sun", &lc.intensity,   0.0f,  4.0f);
+                break; // only the first directional light
+            }
         }
 
         if (ImGui::CollapsingHeader("Point Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
-            int removeIdx = -1;
-            for (int i = 0; i < static_cast<int>(pointLights.size()); ++i) {
-                ImGui::PushID(i);
-                auto &pl = pointLights[i];
-                const std::string label = (i == 0) ? "Lamp" : "Light " + std::to_string(i);
-                if (ImGui::CollapsingHeader(label.c_str())) {
-                    ImGui::Checkbox("Enabled", &pl.enabled);
-                    ImGui::ColorEdit3("Color##pl",        &pl.color.x);
-                    ImGui::SliderFloat("Intensity##pl", &pl.intensity, 0.0f, 20.0f);
-                    if (i == 0) {
-                        const glm::vec3 p = lamp.transform.getWorldPosition();
-                        ImGui::TextDisabled("Pos  %.2f  %.2f  %.2f", p.x, p.y, p.z);
-                    } else {
-                        ImGui::DragFloat3("Position##pl", &pl.position.x, 0.05f);
-                        if (ImGui::Button("Remove")) removeIdx = i;
-                    }
+            using LT = sonnet::world::LightComponent::Type;
+            int plCount = 0;
+            for (const auto &obj : scene.objects()) {
+                if (!obj->light || obj->light->type != LT::Point) continue;
+                auto &lc = *obj->light;
+                ImGui::PushID(obj->name.c_str());
+                if (ImGui::CollapsingHeader(obj->name.c_str())) {
+                    ImGui::Checkbox("Enabled",           &lc.enabled);
+                    ImGui::ColorEdit3("Color##pl",        &lc.color.x);
+                    ImGui::SliderFloat("Intensity##pl",   &lc.intensity, 0.0f, 20.0f);
+                    const glm::vec3 p = obj->transform.getWorldPosition();
+                    ImGui::TextDisabled("Pos  %.2f  %.2f  %.2f", p.x, p.y, p.z);
                 }
                 ImGui::PopID();
+                ++plCount;
             }
-            if (removeIdx >= 0)
-                pointLights.erase(pointLights.begin() + removeIdx);
-            if (static_cast<int>(pointLights.size()) < 8) {
-                if (ImGui::Button("+ Add Point Light"))
-                    pointLights.push_back({.color={1,1,1},.intensity=3,.position=camPos,.enabled=true});
-            } else {
-                ImGui::TextDisabled("Max 8 lights");
-            }
+            if (plCount == 0)
+                ImGui::TextDisabled("No point lights in scene");
         }
 
         if (ImGui::CollapsingHeader("Shadows")) {

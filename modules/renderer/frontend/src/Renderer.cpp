@@ -104,6 +104,11 @@ GPUTextureHandle Renderer::colorTextureHandle(RenderTargetHandle handle, std::si
     return texHandle;
 }
 
+const api::render::MaterialTemplate *Renderer::getMaterial(core::MaterialTemplateHandle h) const {
+    auto it = m_materials.find(h);
+    return it != m_materials.end() ? &it->second : nullptr;
+}
+
 void Renderer::reloadShader(core::ShaderHandle handle,
                              const std::string &vertSrc,
                              const std::string &fragSrc) {

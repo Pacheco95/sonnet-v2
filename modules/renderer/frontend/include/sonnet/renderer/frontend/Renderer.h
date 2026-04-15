@@ -43,6 +43,11 @@ public:
     // Useful for passing render-target textures to ImGui::Image.
     [[nodiscard]] unsigned                       nativeTextureId(core::GPUTextureHandle handle) const;
 
+    // Look up a MaterialTemplate by handle. Returns nullptr if not found.
+    // Used by editor UI to display/edit material uniforms generically.
+    [[nodiscard]] const api::render::MaterialTemplate *getMaterial(
+        core::MaterialTemplateHandle h) const;
+
     // Recompile a shader in-place. The handle and all MaterialTemplates that
     // reference it remain valid. If compilation fails the old shader is kept
     // and the exception is re-thrown so the caller can log it.

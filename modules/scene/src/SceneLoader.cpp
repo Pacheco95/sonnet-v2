@@ -273,13 +273,25 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
 
             if (type == "directional") {
                 const auto dir = lc.value("direction", json::array({0.0, -1.0, 0.0}));
+                const glm::vec3 direction = glm::normalize(glm::vec3{
+                    dir[0].get<float>(), dir[1].get<float>(), dir[2].get<float>()});
+                obj.light = world::LightComponent{
+                    .type      = world::LightComponent::Type::Directional,
+                    .color     = color,
+                    .intensity = intensity,
+                    .direction = direction,
+                };
                 result.directionalLights.push_back(api::render::DirectionalLight{
-                    .direction = glm::normalize(glm::vec3{
-                        dir[0].get<float>(), dir[1].get<float>(), dir[2].get<float>()}),
+                    .direction = direction,
                     .color     = color,
                     .intensity = intensity,
                 });
             } else if (type == "point") {
+                obj.light = world::LightComponent{
+                    .type      = world::LightComponent::Type::Point,
+                    .color     = color,
+                    .intensity = intensity,
+                };
                 result.pointLights.push_back(api::render::PointLight{
                     .position  = obj.transform.getWorldPosition(),
                     .color     = color,
