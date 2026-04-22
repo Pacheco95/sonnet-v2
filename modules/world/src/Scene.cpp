@@ -1,6 +1,7 @@
 #include <sonnet/world/Scene.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace sonnet::world {
 
@@ -78,9 +79,31 @@ void Scene::destroyObject(GameObject *obj) {
         m_objects.end());
 }
 
-void Scene::buildRenderQueue(std::vector<api::render::RenderItem> &queue) const {
+void Scene::buildRenderQueue(std::vector<api::render::RenderItem>  &queue,
+                              const std::array<glm::vec4, 6>        *frustumPlanes) const {
     for (const auto &obj : m_objects) {
         if (!obj->enabled || !obj->render) continue;
+
+        if (frustumPlanes && !obj->skin) {
+            const glm::mat4 &model  = obj->transform.getModelMatrix();
+            const glm::vec3  center = glm::vec3(model * glm::vec4(obj->render->boundsCenter, 1.0f));
+            // Scale radius by the largest column length (handles non-uniform scale).
+            // Add a 10% guard band so objects right at the frustum boundary don't flicker.
+            const float sx = glm::length(glm::vec3(model[0]));
+            const float sy = glm::length(glm::vec3(model[1]));
+            const float sz = glm::length(glm::vec3(model[2]));
+            const float r  = obj->render->boundsRadius * std::max({sx, sy, sz}) * 1.1f;
+
+            bool outside = false;
+            for (const auto &plane : *frustumPlanes) {
+                if (glm::dot(glm::vec3(plane), center) + plane.w < -r) {
+                    outside = true;
+                    break;
+                }
+            }
+            if (outside) continue;
+        }
+
         queue.push_back({
             .name        = obj->name,
             .mesh        = obj->render->mesh,

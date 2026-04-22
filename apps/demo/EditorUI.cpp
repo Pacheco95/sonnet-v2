@@ -63,7 +63,14 @@ void EditorUI::saveSceneImpl() {
         if (name.empty() || name.find('/') != std::string::npos) continue;
         auto it = m_loaded.objects.find(name);
         if (it == m_loaded.objects.end()) continue;
-        const auto &tf = it->second->transform;
+        const auto *obj = it->second;
+        const auto &tf  = obj->transform;
+
+        // Persist enabled state (omit key when true to keep JSON clean).
+        if (!obj->enabled)
+            objSpec["enabled"] = false;
+        else
+            objSpec.erase("enabled");
 
         const auto p = tf.getLocalPosition();
         objSpec["position"] = {p.x, p.y, p.z};

@@ -14,6 +14,28 @@
 
 using namespace sonnet::api::render;
 
+// Extract the 6 normalized frustum planes (left/right/bottom/top/near/far) from
+// a column-major VP matrix using the Gribb-Hartmann method.
+// Each plane (a,b,c,d) satisfies: dot({a,b,c}, worldPos) + d >= 0 for inside points.
+static std::array<glm::vec4, 6> extractFrustumPlanes(const glm::mat4 &vp)
+{
+    auto row = [&](int i) -> glm::vec4 {
+        return {vp[0][i], vp[1][i], vp[2][i], vp[3][i]};
+    };
+    const glm::vec4 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+    std::array<glm::vec4, 6> planes = {
+        r3 + r0,  // left
+        r3 - r0,  // right
+        r3 + r1,  // bottom
+        r3 - r1,  // top
+        r3 + r2,  // near  (OpenGL NDC z ∈ [-1, 1])
+        r3 - r2,  // far
+    };
+    for (auto &p : planes)
+        p /= glm::length(glm::vec3(p)); // normalize so radius comparison is correct
+    return planes;
+}
+
 static const RenderState kNoDepth{
     .depthTest  = false,
     .depthWrite = false,
@@ -273,8 +295,9 @@ void PostProcess::buildGraph()
         /*isOutput=*/ false,
         [this](const FrameContext &ctx, const FrameContext &) {
             if (!m_params.scene) return;
+            const auto frustum = extractFrustumPlanes(ctx.projectionMatrix * ctx.viewMatrix);
             std::vector<RenderItem> queue;
-            m_params.scene->buildRenderQueue(queue);
+            m_params.scene->buildRenderQueue(queue, &frustum);
             // Emissive indicator spheres for point lights without a render mesh.
             for (const auto &obj : m_params.scene->objects()) {
                 if (!obj->enabled || !obj->light || !obj->light->enabled) continue;

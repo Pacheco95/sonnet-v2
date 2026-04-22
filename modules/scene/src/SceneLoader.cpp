@@ -15,8 +15,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <functional>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -35,30 +39,73 @@ void SceneLoader::registerTexture(const std::string &name, core::GPUTextureHandl
 
 namespace {
 
+// Compute a centroid-based bounding sphere from a packed vertex buffer.
+// PositionAttribute is always location 0 (first attribute), so its byte
+// offset within each vertex is 0 and its type is glm::vec3 (12 bytes).
+static std::pair<glm::vec3, float>
+computeBoundingSphere(const api::render::CPUMesh &mesh) {
+    const std::size_t n      = mesh.vertexCount();
+    const std::size_t stride = mesh.layout().getStride();
+    if (n == 0) return {{}, 0.0f};
+
+    const auto &raw = mesh.rawData();
+
+    glm::vec3 center{0.0f};
+    for (std::size_t i = 0; i < n; ++i) {
+        glm::vec3 p;
+        std::memcpy(&p, raw.data() + i * stride, sizeof(glm::vec3));
+        center += p;
+    }
+    center /= static_cast<float>(n);
+
+    float maxD2 = 0.0f;
+    for (std::size_t i = 0; i < n; ++i) {
+        glm::vec3 p;
+        std::memcpy(&p, raw.data() + i * stride, sizeof(glm::vec3));
+        const float d2 = glm::dot(p - center, p - center);
+        if (d2 > maxD2) maxD2 = d2;
+    }
+    return {center, std::sqrt(maxD2)};
+}
+
+// Upload a CPUMesh and fill out the local-space bounding sphere.
+static core::GPUMeshHandle uploadMesh(const api::render::CPUMesh &cpuMesh,
+                                       renderer::frontend::Renderer &renderer,
+                                       glm::vec3 &outCenter, float &outRadius) {
+    auto [c, r] = computeBoundingSphere(cpuMesh);
+    outCenter   = c;
+    outRadius   = r;
+    return renderer.createMesh(cpuMesh);
+}
+
 core::GPUMeshHandle loadMesh(const json &spec,
                               const std::string &assetsDir,
-                              renderer::frontend::Renderer &renderer) {
+                              renderer::frontend::Renderer &renderer,
+                              glm::vec3 &outCenter, float &outRadius) {
     if (spec.is_string()) {
         const std::string path = assetsDir + "/" + spec.get<std::string>();
         auto meshes = loaders::ModelLoader::load(path);
         if (meshes.empty())
             throw std::runtime_error("SceneLoader: no meshes in " + path);
-        return renderer.createMesh(meshes[0]);
+        return uploadMesh(meshes[0], renderer, outCenter, outRadius);
     }
 
     const std::string prim = spec.at("primitive");
     if (prim == "box") {
         auto s = spec.at("size");
-        return renderer.createMesh(primitives::makeBox({s[0], s[1], s[2]}));
+        return uploadMesh(primitives::makeBox({s[0], s[1], s[2]}),
+                          renderer, outCenter, outRadius);
     }
     if (prim == "quad") {
         auto s = spec.at("size");
-        return renderer.createMesh(primitives::makeQuad({s[0].get<float>(), s[1].get<float>()}));
+        return uploadMesh(primitives::makeQuad({s[0].get<float>(), s[1].get<float>()}),
+                          renderer, outCenter, outRadius);
     }
     if (prim == "sphere") {
         const int segX = spec.value("segmentsX", 32);
         const int segY = spec.value("segmentsY", 16);
-        return renderer.createMesh(primitives::makeUVSphere(segX, segY, /*smooth=*/true));
+        return uploadMesh(primitives::makeUVSphere(segX, segY, /*smooth=*/true),
+                          renderer, outCenter, outRadius);
     }
     throw std::runtime_error("SceneLoader: unknown primitive '" + prim + "'");
 }
@@ -150,10 +197,11 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
     LoadedScene result;
 
     // ── Asset loading (skipped when renderer is null) ──────────────────────────
-    std::unordered_map<std::string, core::GPUMeshHandle>             meshes;
-    std::unordered_map<std::string, core::GPUTextureHandle>          textures = m_textures;
-    std::unordered_map<std::string, core::ShaderHandle>              shaders;
-    std::unordered_map<std::string, core::MaterialTemplateHandle>    materials;
+    std::unordered_map<std::string, core::GPUMeshHandle>                        meshes;
+    std::unordered_map<std::string, std::pair<glm::vec3, float>>               meshBounds; // center, radius
+    std::unordered_map<std::string, core::GPUTextureHandle>                    textures = m_textures;
+    std::unordered_map<std::string, core::ShaderHandle>                        shaders;
+    std::unordered_map<std::string, core::MaterialTemplateHandle>              materials;
 
     // Model entries: "meshName": { "model": "path.glb", "material": "lit" }
     // Each model holds multiple sub-meshes, PBR materials, and animation clips.
@@ -226,7 +274,9 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                     };
 
                 } else {
-                    meshes[name] = loadMesh(spec, assetsDir, *renderer);
+                    glm::vec3 bc; float br;
+                    meshes[name]      = loadMesh(spec, assetsDir, *renderer, bc, br);
+                    meshBounds[name]  = {bc, br};
                 }
             }
         }
@@ -386,7 +436,8 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                         // only the first is attached directly; extras become sub-children.
                         if (!node.meshIndices.empty()) {
                             const auto &lm = entry.loadedModel.meshes[node.meshIndices[0]];
-                            auto gpuMesh = renderer->createMesh(lm.mesh);
+                            glm::vec3 bCenter; float bRadius;
+                            auto gpuMesh = uploadMesh(lm.mesh, *renderer, bCenter, bRadius);
                             MaterialInstance childMat{resolveMat(lm.hasSkin)};
 
                             if (lm.material.albedo.valid())
@@ -415,8 +466,10 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                                 }
                             }
                             child.render = world::RenderComponent{
-                                .mesh     = gpuMesh,
-                                .material = std::move(childMat),
+                                .mesh         = gpuMesh,
+                                .material     = std::move(childMat),
+                                .boundsCenter = bCenter,
+                                .boundsRadius = bRadius,
                             };
 
                             // For skinned meshes, prepare a SkinComponent.
@@ -484,9 +537,13 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                                 mat.addTexture(uniform, texIt->second);
                         }
                     }
+                    const auto bIt = meshBounds.find(meshName);
                     obj.render = world::RenderComponent{
-                        .mesh     = meshIt->second,
-                        .material = std::move(mat),
+                        .mesh         = meshIt->second,
+                        .material     = std::move(mat),
+                        .boundsCenter = bIt != meshBounds.end() ? bIt->second.first  : glm::vec3{},
+                        .boundsRadius = bIt != meshBounds.end() ? bIt->second.second
+                                                                 : std::numeric_limits<float>::max(),
                     };
                 }
             }

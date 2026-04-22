@@ -8,6 +8,7 @@
 #include <sonnet/world/Transform.h>
 
 #include <glm/glm.hpp>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -16,6 +17,10 @@ namespace sonnet::world {
 struct RenderComponent {
     core::GPUMeshHandle              mesh;
     api::render::MaterialInstance    material;
+    // Local-space bounding sphere used for frustum culling.
+    // Default radius = FLT_MAX means "unconfigured; never cull".
+    glm::vec3                        boundsCenter{0.0f};
+    float                            boundsRadius{std::numeric_limits<float>::max()};
 };
 
 struct LightComponent {

@@ -3,6 +3,8 @@
 #include <sonnet/api/render/RenderItem.h>
 #include <sonnet/world/GameObject.h>
 
+#include <glm/glm.hpp>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,8 +28,11 @@ public:
     // objects (e.g. selection state, script instances) before calling this.
     void destroyObject(GameObject *obj);
 
-    // Append a RenderItem for every object that has a RenderComponent.
-    void buildRenderQueue(std::vector<api::render::RenderItem> &queue) const;
+    // Append a RenderItem for every enabled object that has a RenderComponent.
+    // If frustumPlanes is non-null, objects whose world-space bounding sphere
+    // lies completely outside any plane are skipped.
+    void buildRenderQueue(std::vector<api::render::RenderItem>  &queue,
+                          const std::array<glm::vec4, 6>        *frustumPlanes = nullptr) const;
 
     [[nodiscard]] const std::vector<std::unique_ptr<GameObject>> &objects() const {
         return m_objects;
