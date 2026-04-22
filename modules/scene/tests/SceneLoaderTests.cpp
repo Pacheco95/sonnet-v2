@@ -97,3 +97,85 @@ TEST_CASE("SceneLoader: object with no render section has no render component", 
 
     REQUIRE_FALSE(scene.objects()[0]->render.has_value());
 }
+
+TEST_CASE("SceneLoader: enabled=false object has enabled flag false", "[scene_loader]") {
+    world::Scene scene;
+    scene::SceneLoader loader;
+
+    loader.loadFromString(R"({
+        "objects": [
+            { "name": "On"  },
+            { "name": "Off", "enabled": false }
+        ]
+    })", "", scene);
+
+    REQUIRE( scene.objects()[0]->enabled);
+    REQUIRE(!scene.objects()[1]->enabled);
+}
+
+TEST_CASE("SceneLoader: object with light component gets LightComponent", "[scene_loader]") {
+    world::Scene scene;
+    scene::SceneLoader loader;
+
+    loader.loadFromString(R"({
+        "objects": [
+            { "name": "Sun", "light": { "type": "directional" } }
+        ]
+    })", "", scene);
+
+    REQUIRE(scene.objects()[0]->light.has_value());
+}
+
+TEST_CASE("SceneLoader: directional light fields parsed correctly", "[scene_loader]") {
+    world::Scene scene;
+    scene::SceneLoader loader;
+
+    auto loaded = loader.loadFromString(R"({
+        "objects": [{
+            "name": "Sun",
+            "light": {
+                "type":      "directional",
+                "color":     [0.8, 0.9, 1.0],
+                "intensity": 3.5,
+                "direction": [0.0, -1.0, 0.0]
+            }
+        }]
+    })", "", scene);
+
+    const auto &lc = scene.objects()[0]->light;
+    REQUIRE(lc.has_value());
+    REQUIRE(lc->type == world::LightComponent::Type::Directional);
+    REQUIRE_THAT(lc->intensity, Catch::Matchers::WithinAbs(3.5f, 1e-5f));
+    REQUIRE_THAT(lc->color.r,   Catch::Matchers::WithinAbs(0.8f, 1e-5f));
+
+    REQUIRE(loaded.directionalLights.size() == 1);
+    REQUIRE_THAT(loaded.directionalLights[0].intensity,
+                 Catch::Matchers::WithinAbs(3.5f, 1e-5f));
+}
+
+TEST_CASE("SceneLoader: point light fields parsed correctly", "[scene_loader]") {
+    world::Scene scene;
+    scene::SceneLoader loader;
+
+    auto loaded = loader.loadFromString(R"({
+        "objects": [{
+            "name": "Lamp",
+            "position": [2.0, 4.0, 0.0],
+            "light": {
+                "type":      "point",
+                "color":     [1.0, 0.5, 0.2],
+                "intensity": 8.0
+            }
+        }]
+    })", "", scene);
+
+    const auto &lc = scene.objects()[0]->light;
+    REQUIRE(lc.has_value());
+    REQUIRE(lc->type == world::LightComponent::Type::Point);
+    REQUIRE_THAT(lc->intensity, Catch::Matchers::WithinAbs(8.0f, 1e-5f));
+    REQUIRE_THAT(lc->color.g,   Catch::Matchers::WithinAbs(0.5f, 1e-5f));
+
+    REQUIRE(loaded.pointLights.size() == 1);
+    REQUIRE_THAT(loaded.pointLights[0].intensity,
+                 Catch::Matchers::WithinAbs(8.0f, 1e-5f));
+}

@@ -15,3 +15,7 @@ target_link_libraries(sonnet_loaders
     PRIVATE stb::image
             assimp::assimp
 )
+
+sonnet_add_module_test(sonnet_loaders
+    tests/BoundsTests.cpp
+)

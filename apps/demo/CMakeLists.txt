@@ -11,6 +11,7 @@ add_executable(demo
 target_link_libraries(demo PRIVATE
     sonnet::renderer::frontend
     sonnet::primitives
+    sonnet::physics
     sonnet::scene
     sonnet::loaders
     sonnet::world

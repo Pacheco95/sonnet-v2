@@ -8,6 +8,7 @@
 #include <sonnet/input/InputSystem.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
+#include <sonnet/physics/PhysicsSystem.h>
 #include <sonnet/scene/SceneLoader.h>
 #include <sonnet/scripting/LuaScriptRuntime.h>
 #include <sonnet/world/GameObject.h>
@@ -87,6 +88,7 @@ public:
              sonnet::scripting::LuaScriptRuntime          &scripts,
              const sonnet::scene::LoadedScene             &loaded,
              const PostProcess                            &pp,
+             sonnet::physics::PhysicsSystem               &physics,
              const char                                   *sceneFilePath);
 
     // Draw all editor panels for this frame (called between imgui.begin/end).
@@ -115,6 +117,7 @@ private:
     sonnet::scripting::LuaScriptRuntime         &m_scripts;
     const sonnet::scene::LoadedScene            &m_loaded;
     const PostProcess                           &m_pp;
+    sonnet::physics::PhysicsSystem              &m_physics;
     const char                                  *m_sceneFilePath;
 
     // Asset name caches (populated at construction)

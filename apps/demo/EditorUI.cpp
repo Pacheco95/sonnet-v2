@@ -23,10 +23,12 @@ EditorUI::EditorUI(sonnet::renderer::frontend::Renderer        &renderer,
                     sonnet::scripting::LuaScriptRuntime         &scripts,
                     const sonnet::scene::LoadedScene            &loaded,
                     const PostProcess                           &pp,
+                    sonnet::physics::PhysicsSystem              &physics,
                     const char                                  *sceneFilePath)
     : m_renderer(renderer), m_backend(backend),
       m_scene(scene), m_scripts(scripts),
       m_loaded(loaded), m_pp(pp),
+      m_physics(physics),
       m_sceneFilePath(sceneFilePath)
 {
     // Populate asset name caches from scene.json.
@@ -721,6 +723,17 @@ void EditorUI::drawInspectorPanel() {
                 const float dur = ap.clips[ap.currentClip].duration;
                 ImGui::SliderFloat("Time", &ap.time, 0.0f, dur > 0.0f ? dur : 1.0f, "%.2f s");
                 ImGui::PopID();
+            }
+        }
+        if (const auto *bodyDef = m_physics.getBodyDef(m_selectedObject)) {
+            if (ImGui::CollapsingHeader("Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
+                const char *types[] = {"Static", "Dynamic", "Kinematic"};
+                ImGui::TextDisabled("Body type: %s",
+                    types[static_cast<int>(bodyDef->bodyType)]);
+                if (bodyDef->bodyType != sonnet::physics::BodyType::Static)
+                    ImGui::TextDisabled("Mass: %.3f kg", bodyDef->mass);
+                ImGui::TextDisabled("Friction: %.2f  Restitution: %.2f",
+                    bodyDef->friction, bodyDef->restitution);
             }
         }
     } else {

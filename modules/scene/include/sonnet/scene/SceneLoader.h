@@ -8,8 +8,9 @@
 #include <vector>
 
 // Forward declarations — callers only need the full types when constructing.
-namespace sonnet::world        { class Scene; class GameObject; }
+namespace sonnet::world           { class Scene; class GameObject; }
 namespace sonnet::renderer::frontend { class Renderer; }
+namespace sonnet::physics         { class PhysicsSystem; }
 
 namespace sonnet::scene {
 
@@ -74,17 +75,21 @@ public:
     void registerTexture(const std::string &name, core::GPUTextureHandle handle);
 
     // Load from a JSON file. Relative asset paths are resolved from assetsDir.
+    // If physicsSystem is non-null, objects with a "physics" JSON key are
+    // registered as physics bodies.
     LoadedScene load(const std::string &sceneFile,
                      const std::string &assetsDir,
                      world::Scene &scene,
-                     renderer::frontend::Renderer &renderer);
+                     renderer::frontend::Renderer &renderer,
+                     physics::PhysicsSystem *physicsSystem = nullptr);
 
     // Load from a JSON string. When renderer is null, asset loading and render
     // component assignment are skipped — useful for unit tests.
     LoadedScene loadFromString(const std::string &json,
                                const std::string &assetsDir,
                                world::Scene &scene,
-                               renderer::frontend::Renderer *renderer = nullptr);
+                               renderer::frontend::Renderer *renderer = nullptr,
+                               physics::PhysicsSystem *physicsSystem = nullptr);
 
 private:
     std::unordered_map<std::string, core::GPUTextureHandle> m_textures;

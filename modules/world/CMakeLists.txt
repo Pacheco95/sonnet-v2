@@ -20,4 +20,5 @@ sonnet_add_module_test(sonnet_world
     tests/TransformTests.cpp
     tests/SceneTests.cpp
     tests/CameraTests.cpp
+    tests/AnimationPlayerTests.cpp
 )

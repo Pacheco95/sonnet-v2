@@ -52,6 +52,10 @@ struct LoadedMesh {
     MeshMaterial         material;
     std::string          name;
 
+    // Local-space bounding sphere, computed during load.
+    glm::vec3 boundsCenter{0.0f};
+    float     boundsRadius{0.0f};
+
     // Skin data — non-empty when the mesh is skinned (hasSkin == true).
     bool                  hasSkin = false;
     std::vector<BoneInfo> bones;   // bone index → name + inverse bind matrix
@@ -94,6 +98,12 @@ struct LoadedModel {
     int                        rootNode = 0;
     std::vector<AnimationClip> animations;
 };
+
+// Compute a centroid-based bounding sphere for a CPU mesh.
+// Assumes position is the first attribute (offset 0, type glm::vec3).
+// Returns {localCenter, radius}.
+[[nodiscard]] std::pair<glm::vec3, float>
+computeBoundingSphere(const api::render::CPUMesh &mesh);
 
 class ModelLoader {
 public:

@@ -1,4 +1,5 @@
 #include <sonnet/scene/SceneLoader.h>
+#include <sonnet/physics/PhysicsSystem.h>
 
 #include <sonnet/api/render/Light.h>
 #include <sonnet/api/render/Material.h>
@@ -16,8 +17,6 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <cmath>
-#include <cstring>
 #include <functional>
 #include <fstream>
 #include <limits>
@@ -39,40 +38,11 @@ void SceneLoader::registerTexture(const std::string &name, core::GPUTextureHandl
 
 namespace {
 
-// Compute a centroid-based bounding sphere from a packed vertex buffer.
-// PositionAttribute is always location 0 (first attribute), so its byte
-// offset within each vertex is 0 and its type is glm::vec3 (12 bytes).
-static std::pair<glm::vec3, float>
-computeBoundingSphere(const api::render::CPUMesh &mesh) {
-    const std::size_t n      = mesh.vertexCount();
-    const std::size_t stride = mesh.layout().getStride();
-    if (n == 0) return {{}, 0.0f};
-
-    const auto &raw = mesh.rawData();
-
-    glm::vec3 center{0.0f};
-    for (std::size_t i = 0; i < n; ++i) {
-        glm::vec3 p;
-        std::memcpy(&p, raw.data() + i * stride, sizeof(glm::vec3));
-        center += p;
-    }
-    center /= static_cast<float>(n);
-
-    float maxD2 = 0.0f;
-    for (std::size_t i = 0; i < n; ++i) {
-        glm::vec3 p;
-        std::memcpy(&p, raw.data() + i * stride, sizeof(glm::vec3));
-        const float d2 = glm::dot(p - center, p - center);
-        if (d2 > maxD2) maxD2 = d2;
-    }
-    return {center, std::sqrt(maxD2)};
-}
-
 // Upload a CPUMesh and fill out the local-space bounding sphere.
 static core::GPUMeshHandle uploadMesh(const api::render::CPUMesh &cpuMesh,
                                        renderer::frontend::Renderer &renderer,
                                        glm::vec3 &outCenter, float &outRadius) {
-    auto [c, r] = computeBoundingSphere(cpuMesh);
+    auto [c, r] = loaders::computeBoundingSphere(cpuMesh);
     outCenter   = c;
     outRadius   = r;
     return renderer.createMesh(cpuMesh);
@@ -180,19 +150,21 @@ core::UniformValue parseUniformValue(const json &v) {
 LoadedScene SceneLoader::load(const std::string &sceneFile,
                                const std::string &assetsDir,
                                world::Scene &scene,
-                               renderer::frontend::Renderer &renderer) {
+                               renderer::frontend::Renderer &renderer,
+                               physics::PhysicsSystem *physicsSystem) {
     std::ifstream f{sceneFile};
     if (!f)
         throw std::runtime_error("SceneLoader: cannot open '" + sceneFile + "'");
     const std::string content{std::istreambuf_iterator<char>{f},
                                std::istreambuf_iterator<char>{}};
-    return loadFromString(content, assetsDir, scene, &renderer);
+    return loadFromString(content, assetsDir, scene, &renderer, physicsSystem);
 }
 
 LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                                          const std::string &assetsDir,
                                          world::Scene &scene,
-                                         renderer::frontend::Renderer *renderer) {
+                                         renderer::frontend::Renderer *renderer,
+                                         physics::PhysicsSystem *physicsSystem) {
     const json doc = json::parse(jsonStr);
     LoadedScene result;
 
@@ -432,12 +404,23 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                         child.transform.setLocalRotation(node.localRotation);
                         child.transform.setLocalScale(node.localScale);
 
-                        // Attach mesh (if any).  When a node owns multiple meshes,
-                        // only the first is attached directly; extras become sub-children.
-                        if (!node.meshIndices.empty()) {
-                            const auto &lm = entry.loadedModel.meshes[node.meshIndices[0]];
-                            glm::vec3 bCenter; float bRadius;
-                            auto gpuMesh = uploadMesh(lm.mesh, *renderer, bCenter, bRadius);
+                        // Attach mesh(es). The first mesh goes on this node; extra meshes
+                        // (rare in practice) become sub-children to keep the hierarchy clean.
+                        for (std::size_t mi = 0; mi < node.meshIndices.size(); ++mi) {
+                            const auto &lm = entry.loadedModel.meshes[node.meshIndices[mi]];
+
+                            // First mesh attaches to the node GameObject itself.
+                            // Additional meshes get their own child object.
+                            world::GameObject *meshObj = &child;
+                            if (mi > 0) {
+                                const std::string extraName =
+                                    childName + "_mesh" + std::to_string(mi);
+                                auto &extra = scene.createObject(extraName, &child);
+                                result.objects[extraName] = &extra;
+                                meshObj = &extra;
+                            }
+
+                            auto gpuMesh = renderer->createMesh(lm.mesh);
                             MaterialInstance childMat{resolveMat(lm.hasSkin)};
 
                             if (lm.material.albedo.valid())
@@ -458,23 +441,23 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                             childMat.set("uRoughness",    lm.material.roughnessFactor);
                             childMat.set("uAlbedoFactor", lm.material.albedoFactor);
 
-                            if (rc.contains("textures")) {
+                            if (mi == 0 && rc.contains("textures")) {
                                 for (const auto &[uniform, texName] : rc["textures"].items()) {
                                     auto texIt = textures.find(texName.get<std::string>());
                                     if (texIt != textures.end())
                                         childMat.addTexture(uniform, texIt->second);
                                 }
                             }
-                            child.render = world::RenderComponent{
+                            meshObj->render = world::RenderComponent{
                                 .mesh         = gpuMesh,
                                 .material     = std::move(childMat),
-                                .boundsCenter = bCenter,
-                                .boundsRadius = bRadius,
+                                .boundsCenter = lm.boundsCenter,
+                                .boundsRadius = lm.boundsRadius,
                             };
 
-                            // For skinned meshes, prepare a SkinComponent.
-                            // Bone transform pointers are wired up after all nodes exist.
-                            if (lm.hasSkin) {
+                            // Skinning — set up only for the first mesh per node.
+                            // Multiple skinned meshes per node is not supported.
+                            if (mi == 0 && lm.hasSkin) {
                                 world::SkinComponent skinComp;
                                 skinComp.numBones = static_cast<int>(lm.bones.size());
                                 skinComp.inverseBindMatrices.reserve(lm.bones.size());
@@ -547,6 +530,28 @@ LoadedScene SceneLoader::loadFromString(const std::string &jsonStr,
                     };
                 }
             }
+        }
+
+        // Physics component
+        if (physicsSystem && spec.contains("physics")) {
+            const auto &ph = spec["physics"];
+            physics::PhysicsBodyDef def;
+
+            const std::string bodyType = ph.value("bodyType", "static");
+            if      (bodyType == "dynamic")   def.bodyType = physics::BodyType::Dynamic;
+            else if (bodyType == "kinematic") def.bodyType = physics::BodyType::Kinematic;
+            else                              def.bodyType = physics::BodyType::Static;
+
+            const std::string shape = ph.value("shape", "box");
+            def.shapeType      = (shape == "sphere") ? physics::ShapeType::Sphere
+                                                     : physics::ShapeType::Box;
+            def.mass           = ph.value("mass",           1.0f);
+            def.friction       = ph.value("friction",       0.5f);
+            def.restitution    = ph.value("restitution",    0.0f);
+            def.linearDamping  = ph.value("linearDamping",  0.05f);
+            def.angularDamping = ph.value("angularDamping", 0.05f);
+
+            physicsSystem->addBody(obj, def);
         }
     }
 

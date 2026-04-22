@@ -115,6 +115,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(sol2)
 
+# Jolt Physics — rigid-body simulation
+set(JPH_BUILD_UNITTESTS             OFF CACHE BOOL   "" FORCE)
+set(JPH_FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(jolt
+    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+    GIT_TAG        v5.5.0
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  "Build"
+)
+FetchContent_MakeAvailable(jolt)
+if(TARGET Jolt)
+    set_target_properties(Jolt PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+    target_compile_options(Jolt PRIVATE -w)
+endif()
+
 if(SONNET_BUILD_TESTS)
     FetchContent_Declare(
         Catch2

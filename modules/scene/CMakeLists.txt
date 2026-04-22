@@ -13,6 +13,7 @@ target_link_libraries(sonnet_scene
             sonnet::world
     PRIVATE sonnet::api
             sonnet::loaders
+            sonnet::physics
             sonnet::primitives
             sonnet::renderer::frontend
             nlohmann_json::nlohmann_json

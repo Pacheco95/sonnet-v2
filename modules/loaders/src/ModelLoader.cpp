@@ -11,12 +11,42 @@
 
 #include <stb_image.h>
 
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
 
 namespace sonnet::loaders {
+
+// ── computeBoundingSphere ──────────────────────────────────────────────────────
+// Centroid-based bounding sphere.  PositionAttribute is always location 0 so
+// its byte offset is 0 and its type is glm::vec3 (12 bytes).
+std::pair<glm::vec3, float>
+computeBoundingSphere(const api::render::CPUMesh &mesh) {
+    const std::size_t n      = mesh.vertexCount();
+    const std::size_t stride = mesh.layout().getStride();
+    if (n == 0) return {{0.0f, 0.0f, 0.0f}, 0.0f};
+
+    const auto &raw = mesh.rawData();
+
+    glm::vec3 center{0.0f};
+    for (std::size_t i = 0; i < n; ++i) {
+        glm::vec3 p;
+        std::memcpy(&p, raw.data() + i * stride, sizeof(glm::vec3));
+        center += p;
+    }
+    center /= static_cast<float>(n);
+
+    float maxD2 = 0.0f;
+    for (std::size_t i = 0; i < n; ++i) {
+        glm::vec3 p;
+        std::memcpy(&p, raw.data() + i * stride, sizeof(glm::vec3));
+        const float d2 = glm::dot(p - center, p - center);
+        if (d2 > maxD2) maxD2 = d2;
+    }
+    return {center, std::sqrt(maxD2)};
+}
 
 using namespace sonnet::api::render;
 
@@ -353,11 +383,14 @@ LoadedModel ModelLoader::loadAll(const std::filesystem::path &path) {
                         mat = extractMaterial(scene,
                                               scene->mMaterials[mesh->mMaterialIndex],
                                               modelDir);
+                    auto [bc, br] = computeBoundingSphere(cpuMesh);
                     const int loadedIdx = static_cast<int>(result.meshes.size());
                     result.meshes.push_back(LoadedMesh{
                         std::move(cpuMesh),
                         std::move(mat),
                         std::string{node->mName.C_Str()},
+                        bc,
+                        br,
                         hasSkin,
                         std::move(bones),
                     });

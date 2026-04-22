@@ -14,6 +14,7 @@
 #include <sonnet/input/InputSystem.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
+#include <sonnet/physics/PhysicsSystem.h>
 #include <sonnet/scene/SceneLoader.h>
 #include <sonnet/scripting/LuaScriptRuntime.h>
 #include <sonnet/ui/ImGuiLayer.h>
@@ -61,11 +62,15 @@ int main() {
         DEMO_ASSETS_DIR "/kloppenheim_06_1k.hdr",
         DEMO_ASSETS_DIR "/shaders");
 
+    // ── Physics ───────────────────────────────────────────────────────────────
+    sonnet::physics::PhysicsSystem physics;
+    physics.init();
+
     // ── Scene ─────────────────────────────────────────────────────────────────
     sonnet::world::Scene scene;
     sonnet::scene::SceneLoader sceneLoader;
     const auto loaded = sceneLoader.load(
-        DEMO_ASSETS_DIR "/scene.json", DEMO_ASSETS_DIR, scene, renderer);
+        DEMO_ASSETS_DIR "/scene.json", DEMO_ASSETS_DIR, scene, renderer, &physics);
 
     // ── Script runtime ────────────────────────────────────────────────────────
     sonnet::scripting::LuaScriptRuntime scriptRuntime;
@@ -145,7 +150,7 @@ int main() {
     // ── Camera + editor UI ────────────────────────────────────────────────────
     FlyCamera flyCamera{cameraObj.transform};
     EditorUI  ui{renderer, backend, scene, scriptRuntime, loaded, pp,
-                 DEMO_ASSETS_DIR "/scene.json"};
+                 physics, DEMO_ASSETS_DIR "/scene.json"};
 
     // ── Tweakable render state (written through by EditorUI) ──────────────────
     float     rotationSpeed  = 45.0f;
@@ -227,6 +232,7 @@ int main() {
             glm::angleAxis(glm::radians(rotation), glm::vec3{0, 1, 0}));
 
         scriptRuntime.update(dt);
+        physics.step(scene, dt);
 
         for (const auto &obj : scene.objects())
             if (obj->enabled && obj->animationPlayer)
