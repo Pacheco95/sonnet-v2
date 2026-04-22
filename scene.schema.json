@@ -1,0 +1,293 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema",
+    "$id": "sonnet-scene",
+    "title": "Sonnet Scene",
+    "description": "Scene file format consumed by sonnet::scene::SceneLoader",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "assets": { "$ref": "#/$defs/assets" },
+        "objects": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/object" }
+        }
+    },
+
+    "$defs": {
+
+        "vec2": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 2,
+            "maxItems": 2
+        },
+        "vec3": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 3,
+            "maxItems": 3
+        },
+        "vec4": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 4,
+            "maxItems": 4
+        },
+
+        "uniformValue": {
+            "description": "A shader uniform value: float scalar or vec2/vec3/vec4",
+            "oneOf": [
+                { "type": "number" },
+                { "$ref": "#/$defs/vec2" },
+                { "$ref": "#/$defs/vec3" },
+                { "$ref": "#/$defs/vec4" }
+            ]
+        },
+
+        "assets": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "shaders":   { "$ref": "#/$defs/shaderMap" },
+                "materials": { "$ref": "#/$defs/materialMap" },
+                "meshes":    { "$ref": "#/$defs/meshMap" },
+                "textures":  { "$ref": "#/$defs/textureMap" }
+            }
+        },
+
+        "shaderMap": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/shaderSpec" }
+        },
+        "shaderSpec": {
+            "type": "object",
+            "required": ["vert", "frag"],
+            "additionalProperties": false,
+            "properties": {
+                "vert": { "type": "string", "description": "Path to vertex shader source, relative to assetsDir" },
+                "frag": { "type": "string", "description": "Path to fragment shader source, relative to assetsDir" }
+            }
+        },
+
+        "materialMap": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/materialSpec" }
+        },
+        "materialSpec": {
+            "type": "object",
+            "required": ["shader"],
+            "additionalProperties": false,
+            "properties": {
+                "shader": {
+                    "type": "string",
+                    "description": "Name of a shader defined in assets.shaders"
+                },
+                "defaultValues": {
+                    "type": "object",
+                    "description": "Default uniform values applied to every instance of this material",
+                    "additionalProperties": { "$ref": "#/$defs/uniformValue" }
+                }
+            }
+        },
+
+        "meshMap": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/meshSpec" }
+        },
+        "meshSpec": {
+            "description": "A mesh asset: bare file path, a glTF model, or a procedural primitive",
+            "oneOf": [
+                {
+                    "type": "string",
+                    "description": "Path to a mesh file (.obj, etc.) relative to assetsDir"
+                },
+                { "$ref": "#/$defs/meshModel" },
+                { "$ref": "#/$defs/meshBox" },
+                { "$ref": "#/$defs/meshQuad" },
+                { "$ref": "#/$defs/meshSphere" }
+            ]
+        },
+        "meshModel": {
+            "type": "object",
+            "required": ["model"],
+            "additionalProperties": false,
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": "Path to a glTF/GLB file relative to assetsDir"
+                },
+                "material": {
+                    "type": "string",
+                    "description": "Base material template name to apply to the model's sub-meshes (default: \"lit\")"
+                }
+            }
+        },
+        "meshBox": {
+            "type": "object",
+            "required": ["primitive", "size"],
+            "additionalProperties": false,
+            "properties": {
+                "primitive": { "type": "string", "const": "box" },
+                "size": {
+                    "description": "[width, height, depth]",
+                    "$ref": "#/$defs/vec3"
+                }
+            }
+        },
+        "meshQuad": {
+            "type": "object",
+            "required": ["primitive", "size"],
+            "additionalProperties": false,
+            "properties": {
+                "primitive": { "type": "string", "const": "quad" },
+                "size": {
+                    "description": "[width, height]",
+                    "$ref": "#/$defs/vec2"
+                }
+            }
+        },
+        "meshSphere": {
+            "type": "object",
+            "required": ["primitive"],
+            "additionalProperties": false,
+            "properties": {
+                "primitive": { "type": "string", "const": "sphere" },
+                "segmentsX": { "type": "integer", "minimum": 3, "default": 32 },
+                "segmentsY": { "type": "integer", "minimum": 2, "default": 16 }
+            }
+        },
+
+        "textureMap": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/$defs/textureSpec" }
+        },
+        "textureSpec": {
+            "description": "A texture asset: bare file path, a file with color-space override, or a solid 1×1 color",
+            "oneOf": [
+                {
+                    "type": "string",
+                    "description": "Path to an image file relative to assetsDir (loaded as sRGB)"
+                },
+                { "$ref": "#/$defs/textureFile" },
+                { "$ref": "#/$defs/textureColor" }
+            ]
+        },
+        "textureFile": {
+            "type": "object",
+            "required": ["file"],
+            "additionalProperties": false,
+            "properties": {
+                "file": { "type": "string", "description": "Path to an image file relative to assetsDir" },
+                "srgb": { "type": "boolean", "default": true, "description": "false for data textures (normal maps, ORM)" }
+            }
+        },
+        "textureColor": {
+            "type": "object",
+            "required": ["color"],
+            "additionalProperties": false,
+            "properties": {
+                "color": {
+                    "type": "array",
+                    "description": "RGB values 0-255 for a solid 1×1 pixel texture",
+                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+                    "minItems": 3,
+                    "maxItems": 3
+                },
+                "srgb": { "type": "boolean", "default": true }
+            }
+        },
+
+        "object": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+                "name":    { "type": "string", "description": "Unique identifier for this object within the scene" },
+                "parent":  { "type": "string", "description": "Name of the parent object (must appear earlier in the objects array)" },
+                "enabled": { "type": "boolean", "default": true },
+
+                "position": { "$ref": "#/$defs/vec3", "description": "Local position [x, y, z]" },
+                "rotation": {
+                    "description": "Local rotation as a quaternion [x, y, z, w]",
+                    "$ref": "#/$defs/vec4"
+                },
+                "scale": { "$ref": "#/$defs/vec3", "description": "Local scale [x, y, z]" },
+
+                "camera":  { "$ref": "#/$defs/camera" },
+                "light":   { "$ref": "#/$defs/light" },
+                "render":  { "$ref": "#/$defs/render" },
+                "physics": { "$ref": "#/$defs/physics" },
+                "script":  { "type": "string", "description": "Path to a Lua script relative to assetsDir, attached by the script runtime" }
+            }
+        },
+
+        "camera": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "fov":  { "type": "number", "default": 60.0, "description": "Vertical field of view in degrees" },
+                "near": { "type": "number", "default": 0.1,  "description": "Near clip plane distance" },
+                "far":  { "type": "number", "default": 200.0, "description": "Far clip plane distance" }
+            }
+        },
+
+        "light": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": false,
+            "properties": {
+                "type":      { "type": "string", "enum": ["directional", "point"] },
+                "color":     { "$ref": "#/$defs/vec3", "description": "Linear RGB color (default: [1,1,1])" },
+                "intensity": { "type": "number", "default": 1.0 },
+                "direction": {
+                    "$ref": "#/$defs/vec3",
+                    "description": "World-space direction vector, directional lights only (default: [0,-1,0])"
+                }
+            }
+        },
+
+        "render": {
+            "type": "object",
+            "required": ["mesh"],
+            "additionalProperties": false,
+            "properties": {
+                "mesh": {
+                    "type": "string",
+                    "description": "Name of a mesh defined in assets.meshes"
+                },
+                "material": {
+                    "type": "string",
+                    "description": "Name of a material defined in assets.materials. Required for non-model meshes."
+                },
+                "textures": {
+                    "type": "object",
+                    "description": "Texture overrides: uniform name → texture name from assets.textures",
+                    "additionalProperties": { "type": "string" }
+                }
+            }
+        },
+
+        "physics": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "bodyType": {
+                    "type": "string",
+                    "enum": ["static", "dynamic", "kinematic"],
+                    "default": "static"
+                },
+                "shape": {
+                    "type": "string",
+                    "enum": ["box", "sphere"],
+                    "default": "box",
+                    "description": "Collision shape derived from the object's world scale"
+                },
+                "mass":           { "type": "number", "default": 1.0 },
+                "friction":       { "type": "number", "minimum": 0.0, "default": 0.5 },
+                "restitution":    { "type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.0 },
+                "linearDamping":  { "type": "number", "minimum": 0.0, "default": 0.05 },
+                "angularDamping": { "type": "number", "minimum": 0.0, "default": 0.05 }
+            }
+        }
+    }
+}
