@@ -2,22 +2,37 @@
 in  vec2 vUV;
 out vec4 fragColor; // R = AO factor [0,1]
 
-uniform sampler2D uNormalMap; // view-space normals from pre-pass
-uniform sampler2D uDepthMap;  // depth texture from pre-pass
-uniform sampler2D uNoiseMap;  // 4x4 random rotation texture (tiled)
+layout(SET(1,0)) uniform sampler2D uNormalMap; // view-space normals from pre-pass
+layout(SET(1,1)) uniform sampler2D uDepthMap;  // depth texture from pre-pass
+layout(SET(1,2)) uniform sampler2D uNoiseMap;  // 4x4 random rotation texture (tiled)
 
-uniform vec3  uKernel[64];    // hemisphere sample offsets in tangent space
-uniform vec2  uNoiseScale;    // vec2(viewportW/4, viewportH/4) for noise tiling
-
-layout(std140, binding = 0) uniform CameraUBO {
+layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPosition;
     mat4 uInvViewProj;
     mat4 uInvProjection;
 };
-uniform float uRadius;        // SSAO sampling radius in view space
-uniform float uBias;          // depth bias to avoid self-occlusion
+
+// Kernel is ~1 KB and the per-draw scalars are small, so everything lives in
+// the set=2 PerDraw UBO on Vulkan (plain uniforms on OpenGL).
+#ifdef VULKAN
+layout(std140, SET(2,0)) uniform PerDraw {
+    vec3  uKernel[64];      // hemisphere sample offsets in tangent space
+    vec2  uNoiseScale;      // vec2(viewportW/4, viewportH/4) for noise tiling
+    float uRadius;          // SSAO sampling radius in view space
+    float uBias;            // depth bias to avoid self-occlusion
+} pd;
+#define uKernel     pd.uKernel
+#define uNoiseScale pd.uNoiseScale
+#define uRadius     pd.uRadius
+#define uBias       pd.uBias
+#else
+uniform vec3  uKernel[64];
+uniform vec2  uNoiseScale;
+uniform float uRadius;
+uniform float uBias;
+#endif
 
 // Reconstruct view-space position from a depth texture sample.
 vec3 viewPosFromDepth(vec2 uv) {

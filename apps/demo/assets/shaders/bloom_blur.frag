@@ -2,8 +2,16 @@
 in  vec2 vUV;
 out vec4 fragColor;
 
-uniform sampler2D uBloomTexture;
-uniform int       uHorizontal; // 1 = horizontal, 0 = vertical
+layout(SET(1,0)) uniform sampler2D uBloomTexture;
+
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    int uHorizontal; // 1 = horizontal, 0 = vertical
+} pc;
+#define uHorizontal pc.uHorizontal
+#else
+uniform int uHorizontal; // 1 = horizontal, 0 = vertical
+#endif
 
 // 9-tap separable Gaussian weights (sigma ≈ 2.0).
 const float WEIGHT[5] = float[](0.227027, 0.194595, 0.121622, 0.054054, 0.016216);

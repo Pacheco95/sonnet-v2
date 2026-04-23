@@ -2,9 +2,17 @@
 in  vec2 vUV;
 out vec4 fragColor;
 
-uniform sampler2D uScreen;
-uniform sampler2D uDepth;   // pre-pass depth — used to gate on geometric edges only
-uniform vec2      uTexelSize; // 1.0 / vec2(screenWidth, screenHeight)
+layout(SET(1,0)) uniform sampler2D uScreen;
+layout(SET(1,1)) uniform sampler2D uDepth;   // pre-pass depth — used to gate on geometric edges only
+
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    vec2 uTexelSize;
+} pc;
+#define uTexelSize pc.uTexelSize
+#else
+uniform vec2 uTexelSize; // 1.0 / vec2(screenWidth, screenHeight)
+#endif
 
 // Luminance weights (Rec. 601)
 const vec3 LUMA = vec3(0.299, 0.587, 0.114);

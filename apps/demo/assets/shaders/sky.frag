@@ -2,8 +2,8 @@
 in  vec3 vDir;
 out vec4 fragColor;
 
-uniform sampler2D uEnvMap; // equirectangular HDR
-uniform sampler2D gDepth;  // G-buffer depth — discard pixels where geometry was drawn
+layout(SET(1,0)) uniform sampler2D uEnvMap; // equirectangular HDR
+layout(SET(1,1)) uniform sampler2D gDepth;  // G-buffer depth — discard pixels where geometry was drawn
 
 const float PI = 3.14159265359;
 

@@ -21,7 +21,9 @@ struct BindState {
     static constexpr std::uint32_t kMaxUboBindings      = 8;
     static constexpr std::uint32_t kMaxMaterialTextures = 16;
     static constexpr std::uint32_t kPushConstantBytes   = 128;
-    static constexpr std::uint32_t kPerDrawStagingBytes = 1024;
+    // Large enough for the SSAO pass's 64-element vec3 kernel (1 KB in std140)
+    // plus header scalars; bump if a future shader overflows.
+    static constexpr std::uint32_t kPerDrawStagingBytes = 4096;
 
     VkBuffer                              currentVertex = VK_NULL_HANDLE;
     VkBuffer                              currentIndex  = VK_NULL_HANDLE;

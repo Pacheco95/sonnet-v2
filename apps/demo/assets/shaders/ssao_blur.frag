@@ -2,7 +2,7 @@
 in  vec2 vUV;
 out vec4 fragColor;
 
-uniform sampler2D uSSAOTexture;
+layout(SET(1,0)) uniform sampler2D uSSAOTexture;
 
 void main() {
     // Simple 5x5 box blur to smooth SSAO noise.

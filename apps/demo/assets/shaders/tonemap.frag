@@ -1,12 +1,25 @@
 #version 460 core
 in  vec2 vUV;
 out vec4 fragColor;
-uniform sampler2D uHdrColor;
-uniform sampler2D uBloomTexture;
-uniform sampler2D uSSRTex;
-uniform float     uExposure;
-uniform float     uBloomIntensity;
-uniform float     uSSRStrength;
+
+layout(SET(1,0)) uniform sampler2D uHdrColor;
+layout(SET(1,1)) uniform sampler2D uBloomTexture;
+layout(SET(1,2)) uniform sampler2D uSSRTex;
+
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    float uExposure;
+    float uBloomIntensity;
+    float uSSRStrength;
+} pc;
+#define uExposure       pc.uExposure
+#define uBloomIntensity pc.uBloomIntensity
+#define uSSRStrength    pc.uSSRStrength
+#else
+uniform float uExposure;
+uniform float uBloomIntensity;
+uniform float uSSRStrength;
+#endif
 
 // ACES filmic tone-mapping approximation (Krzysztof Narkowicz)
 vec3 aces(vec3 x) {

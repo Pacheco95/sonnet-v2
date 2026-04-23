@@ -2,8 +2,16 @@
 in  vec2 vUV;
 out vec4 fragColor;
 
-uniform sampler2D uHdrColor;
-uniform float     uBloomThreshold;
+layout(SET(1,0)) uniform sampler2D uHdrColor;
+
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    float uBloomThreshold;
+} pc;
+#define uBloomThreshold pc.uBloomThreshold
+#else
+uniform float uBloomThreshold;
+#endif
 
 void main() {
     vec3  color      = texture(uHdrColor, vUV).rgb;

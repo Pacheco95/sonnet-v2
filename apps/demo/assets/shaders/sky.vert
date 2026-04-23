@@ -1,7 +1,7 @@
 #version 460 core
 layout(location = 0) in vec3 aPosition;
 
-layout(std140, binding = 0) uniform CameraUBO {
+layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPosition;
