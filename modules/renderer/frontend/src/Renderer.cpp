@@ -175,6 +175,15 @@ std::uintptr_t Renderer::imGuiTextureId(GPUTextureHandle handle) {
     return it->second->getImGuiTextureId();
 }
 
+std::array<std::uint8_t, 4> Renderer::readPixelRGBA8(
+    RenderTargetHandle handle, std::uint32_t attachmentIndex,
+    std::uint32_t x, std::uint32_t y) {
+    auto it = m_renderTargets.find(handle);
+    if (it == m_renderTargets.end())
+        throw std::invalid_argument("readPixelRGBA8: unknown RenderTargetHandle");
+    return it->second->readPixelRGBA8(attachmentIndex, x, y);
+}
+
 void Renderer::beginFrame() {
     m_backend.beginFrame();
 }

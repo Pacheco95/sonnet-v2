@@ -48,6 +48,28 @@ const ITexture *GlRenderTarget::depthTexture() const {
     return m_depthTexture.get();
 }
 
+std::array<std::uint8_t, 4> GlRenderTarget::readPixelRGBA8(
+    std::uint32_t attachmentIndex, std::uint32_t x, std::uint32_t y) const {
+    if (attachmentIndex >= m_colorTextures.size()) {
+        throw std::runtime_error("GlRenderTarget::readPixelRGBA8: attachment out of range");
+    }
+
+    std::array<std::uint8_t, 4> pixel{};
+
+    // Remember current bindings so callers don't have to reset the read/draw
+    // framebuffer after picking.
+    GLint prevReadFbo = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFbo);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT0 + attachmentIndex);
+    glReadPixels(static_cast<GLint>(x), static_cast<GLint>(y), 1, 1,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevReadFbo));
+
+    return pixel;
+}
+
 void GlRenderTarget::attachColorTextures(const RenderTargetDesc &desc, ITextureFactory &factory) {
     std::vector<GLenum> drawBuffers;
 

@@ -2,6 +2,7 @@
 
 #include <sonnet/api/render/ITexture.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -36,6 +37,16 @@ public:
 
     [[nodiscard]] virtual const ITexture *colorTexture(std::size_t index) const = 0;
     [[nodiscard]] virtual const ITexture *depthTexture()                  const = 0;
+
+    // Read one RGBA8 pixel from the given color attachment at (x, y). The
+    // origin is the bottom-left corner of the attachment (matching OpenGL
+    // conventions so existing picking code doesn't have to flip). Blocks
+    // until the read completes — used by user-driven picking / debug.
+    // Throws if the attachment index is out of range, or the format isn't
+    // convertible to RGBA8 on the backend.
+    [[nodiscard]] virtual std::array<std::uint8_t, 4> readPixelRGBA8(
+        std::uint32_t attachmentIndex,
+        std::uint32_t x, std::uint32_t y) const = 0;
 };
 
 } // namespace sonnet::api::render

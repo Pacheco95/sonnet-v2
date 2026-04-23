@@ -9,6 +9,7 @@
 #include <sonnet/core/Types.h>
 #include <sonnet/renderer/frontend/UboLayouts.h>
 
+#include <array>
 #include <memory>
 #include <unordered_map>
 
@@ -50,6 +51,14 @@ public:
     // Return the backend-native texture id (e.g. GLuint) for a texture handle.
     // Prefer imGuiTextureId() for ImGui::Image; this is kept for GL-specific callers.
     [[nodiscard]] unsigned                       nativeTextureId(core::GPUTextureHandle handle) const;
+
+    // Read one RGBA8 pixel from the given render target's color attachment.
+    // Blocks until the GPU reaches the readback (via backend.readPixel — OpenGL
+    // wraps glReadPixels, Vulkan runs a staging copy). Used by picking pass.
+    [[nodiscard]] std::array<std::uint8_t, 4>    readPixelRGBA8(
+        core::RenderTargetHandle handle,
+        std::uint32_t attachmentIndex,
+        std::uint32_t x, std::uint32_t y);
     // Return an ImGui-consumable texture id (cast to ImTextureID by the caller).
     // Works across backends: GL returns the GLuint widened to uintptr_t; Vulkan
     // returns a cached VkDescriptorSet reinterpreted as uintptr_t.

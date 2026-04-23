@@ -64,6 +64,11 @@ void VkRenderTarget::bind() const {
     // Active-RT tracking happens in VkRendererBackend::bindRenderTarget.
 }
 
+std::array<std::uint8_t, 4> VkRenderTarget::readPixelRGBA8(
+    std::uint32_t /*attachmentIndex*/, std::uint32_t /*x*/, std::uint32_t /*y*/) const {
+    SN_VK_TODO("VkRenderTarget::readPixelRGBA8 — needs vkCmdCopyImageToBuffer + fence-wait + map (Phase 7b).");
+}
+
 void VkRenderTarget::buildRenderPass() {
     std::vector<VkAttachmentDescription> attachments;
     std::vector<VkAttachmentReference>   colorRefs;

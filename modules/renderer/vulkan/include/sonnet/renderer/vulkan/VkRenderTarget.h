@@ -41,6 +41,10 @@ public:
         return m_depth.get();
     }
 
+    [[nodiscard]] std::array<std::uint8_t, 4> readPixelRGBA8(
+        std::uint32_t attachmentIndex,
+        std::uint32_t x, std::uint32_t y) const override;
+
     // Backend-internal accessors.
     [[nodiscard]] VkRenderPass  renderPass()  const { return m_renderPass; }
     [[nodiscard]] VkFramebuffer framebuffer() const { return m_framebuffer; }
