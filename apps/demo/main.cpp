@@ -22,7 +22,6 @@
 #include <sonnet/window/GLFWWindow.h>
 #include <sonnet/world/Scene.h>
 
-#include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
@@ -115,25 +114,45 @@ int main() {
     }
 
     // ── SSAO noise texture (4×4, random tangent-space rotations) ─────────────
-    GLuint ssaoNoiseTex = 0;
+    // Packed as RGBA32F (alpha unused by ssao.frag) so we use a format the
+    // engine's TextureFormat enum supports — no need for a raw-GL wrapper.
+    sonnet::core::GPUTextureHandle ssaoNoiseHandle{};
     {
         std::mt19937 rng(123);
         std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-        std::vector<glm::vec3> noiseData(16);
-        for (auto &n : noiseData)
-            n = glm::vec3{dist(rng) * 2.0f - 1.0f, dist(rng) * 2.0f - 1.0f, 0.0f};
-        glGenTextures(1, &ssaoNoiseTex);
-        glBindTexture(GL_TEXTURE_2D, ssaoNoiseTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0,
-                     GL_RGB, GL_FLOAT, noiseData.data());
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,     GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,     GL_REPEAT);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        std::vector<float> noiseData(16 * 4);
+        for (std::size_t i = 0; i < 16; ++i) {
+            noiseData[i * 4 + 0] = dist(rng) * 2.0f - 1.0f;
+            noiseData[i * 4 + 1] = dist(rng) * 2.0f - 1.0f;
+            noiseData[i * 4 + 2] = 0.0f;
+            noiseData[i * 4 + 3] = 0.0f;
+        }
+        const auto *bytes    = reinterpret_cast<const std::byte *>(noiseData.data());
+        const std::size_t nB = noiseData.size() * sizeof(float);
+
+        sonnet::api::render::TextureDesc tdesc{
+            .size       = {4, 4},
+            .format     = sonnet::api::render::TextureFormat::RGBA32F,
+            .type       = sonnet::api::render::TextureType::Texture2D,
+            .usageFlags = sonnet::api::render::TextureUsage::Sampled,
+            .colorSpace = sonnet::api::render::ColorSpace::Linear,
+            .useMipmaps = false,
+        };
+        sonnet::api::render::SamplerDesc sdesc{
+            .minFilter = sonnet::api::render::MinFilter::Nearest,
+            .magFilter = sonnet::api::render::MagFilter::Nearest,
+            .wrapS     = sonnet::api::render::TextureWrap::Repeat,
+            .wrapT     = sonnet::api::render::TextureWrap::Repeat,
+            .wrapR     = sonnet::api::render::TextureWrap::Repeat,
+        };
+        sonnet::api::render::CPUTextureBuffer cpu{
+            .width    = 4,
+            .height   = 4,
+            .channels = 4,
+            .texels   = sonnet::core::Texels{bytes, nB},
+        };
+        ssaoNoiseHandle = renderer.createTexture(tdesc, sdesc, cpu);
     }
-    const auto ssaoNoiseHandle = renderer.registerRawTexture(
-        std::make_unique<RawGLTexture2D>(ssaoNoiseTex));
 
     // ── Render targets ────────────────────────────────────────────────────────
     const auto fbSize0 = window.getFrameBufferSize();
@@ -341,8 +360,7 @@ int main() {
         backend.bindDefaultRenderTarget();
         backend.setViewport(static_cast<std::uint32_t>(fbSize.x),
                             static_cast<std::uint32_t>(fbSize.y));
-        glClearColor(0.08f, 0.08f, 0.08f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        backend.clear({.colors = {{0, {0.08f, 0.08f, 0.08f, 1.0f}}}});
 
         imgui.begin();
 
