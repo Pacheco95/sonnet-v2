@@ -1,24 +1,25 @@
-// Sonnet v2 — Vulkan demo (Phases 1–3)
+// Sonnet v2 — Vulkan demo (Phases 1–4)
 //
-// Minimal triangle renderer that exercises the full Vulkan draw path:
+// Exercises the full Vulkan draw path plus ImGui overlay:
 //   instance → device → swapchain → command context → buffer → shader
-//   (glslang) → pipeline cache → descriptor manager → drawIndexed.
-// The shader uses a push constant for the model matrix, which maps onto
-// the push-constant staging path in VkRendererBackend::setUniform. No UBOs
-// and no material textures are needed, so set=0 and set=1 are both unused.
+//   (glslang) → pipeline cache → descriptor manager → drawIndexed
+//   → imgui_impl_vulkan overlay → present.
 
 #include <sonnet/api/render/VertexAttribute.h>
 #include <sonnet/api/render/VertexLayout.h>
 #include <sonnet/input/InputSystem.h>
 #include <sonnet/renderer/frontend/BackendFactory.h>
+#include <sonnet/renderer/vulkan/VkRendererBackend.h>
+#include <sonnet/ui/ImGuiLayer.h>
 #include <sonnet/window/GLFWInputAdapter.h>
 #include <sonnet/window/GLFWWindow.h>
+
+#include <imgui.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <array>
-#include <cstring>
 
 namespace {
 
@@ -64,11 +65,26 @@ int main() {
     sonnet::window::GLFWInputAdapter adapter{input};
     window.setInputAdapter(&adapter);
 
-    auto backend = sonnet::renderer::frontend::makeBackend(window);
+    auto  backendPtr = sonnet::renderer::frontend::makeBackend(window);
+    auto *backend    = static_cast<sonnet::renderer::vulkan::VkRendererBackend *>(backendPtr.get());
     backend->initialize();
 
-    // ── Geometry: single triangle, CCW-wound so VK_FRONT_FACE_COUNTER_CLOCKWISE
-    // plus VK_CULL_MODE_BACK_BIT keeps it visible. ────────────────────────────
+    // ── ImGui on Vulkan ───────────────────────────────────────────────────────
+    sonnet::ui::ImGuiLayer imgui;
+    const auto info = backend->imGuiInitInfo();
+    imgui.init(window.handle(), sonnet::ui::VulkanInitInfo{
+        .instance       = info.instance,
+        .physicalDevice = info.physicalDevice,
+        .device         = info.device,
+        .queueFamily    = info.queueFamily,
+        .queue          = info.queue,
+        .renderPass     = info.renderPass,
+        .minImageCount  = info.minImageCount,
+        .imageCount     = info.imageCount,
+        .descriptorPool = info.descriptorPool,
+    });
+
+    // ── Triangle geometry + shader ────────────────────────────────────────────
     const std::array<Vertex, 3> verts{{
         {{ 0.0f,  0.6f, 0.0f}, {1.0f, 0.3f, 0.3f, 1.0f}},
         {{-0.6f, -0.5f, 0.0f}, {0.3f, 1.0f, 0.3f, 1.0f}},
@@ -81,8 +97,6 @@ int main() {
     auto ibo = backend->createBuffer(
         sonnet::api::render::BufferType::Index,  indices.data(), sizeof(indices));
 
-    // VertexLayout derived from typed KnownAttributeSet — matches shader's
-    // location 0 (vec3 position) + location 1 (vec4 color).
     sonnet::api::render::KnownAttributeSet attrs;
     attrs.insert(sonnet::api::render::PositionAttribute{});
     attrs.insert(sonnet::api::render::ColorAttribute{});
@@ -113,22 +127,32 @@ int main() {
         backend->setDepthTest(false);
         backend->setCull(sonnet::api::render::CullMode::None);
 
+        // 3D pass — triangle.
         shader->bind();
         vis->bind();
         vbo->bind();
         ibo->bind();
-
         if (const auto it = shader->getUniforms().find("uModel");
             it != shader->getUniforms().end()) {
             backend->setUniform(it->second.location, sonnet::core::UniformValue{model});
         }
-
         backend->drawIndexed(3);
+
+        // ImGui pass — same render pass, layered on top.
+        imgui.begin();
+        ImGui::Begin("Sonnet v2 (Vulkan)");
+        ImGui::Text("FPS: %.1f", dt > 0.0f ? 1.0f / dt : 0.0f);
+        ImGui::Text("Press Escape to exit.");
+        ImGui::End();
+        imgui.end();
+
+        backend->renderImGui();
         backend->endFrame();
 
         window.swapBuffers();
         input.nextFrame();
     }
 
+    imgui.shutdown();
     return 0;
 }

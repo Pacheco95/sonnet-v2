@@ -81,6 +81,25 @@ public:
 
     [[nodiscard]] const core::RendererTraits &traits() const override { return core::presets::Vulkan; }
 
+    // Vulkan-specific ImGui integration. The demo passes the info struct
+    // to sonnet::ui::ImGuiLayer::init under SONNET_USE_VULKAN, and calls
+    // renderImGui() after ImGui::Render each frame so the backend can
+    // record imgui_impl_vulkan's draw commands into the current frame's
+    // command buffer.
+    struct ImGuiInitInfo {
+        VkInstance       instance;
+        VkPhysicalDevice physicalDevice;
+        VkDevice         device;
+        std::uint32_t    queueFamily;
+        VkQueue          queue;
+        VkRenderPass     renderPass;
+        std::uint32_t    minImageCount;
+        std::uint32_t    imageCount;
+        VkDescriptorPool descriptorPool;
+    };
+    [[nodiscard]] ImGuiInitInfo imGuiInitInfo() const;
+    void renderImGui();
+
 private:
     api::window::IWindow                         &m_window;
     api::render::BackendCreateOptions             m_opts;
@@ -112,6 +131,10 @@ private:
     VkRenderPass             m_activeRenderPass  = VK_NULL_HANDLE;
     std::uint32_t            m_activeColorCount  = 1;
     bool                     m_activeHasDepth    = true;
+
+    // Dedicated descriptor pool for imgui_impl_vulkan. ImGui manages its own
+    // allocations from this pool (one per texture it needs to sample).
+    VkDescriptorPool         m_imguiPool         = VK_NULL_HANDLE;
 
     void recreateSwapchain();
 };

@@ -6,8 +6,11 @@ if(SONNET_USE_VULKAN)
 
     target_link_libraries(demo PRIVATE
         sonnet::renderer::frontend
+        sonnet::renderer::vulkan
         sonnet::window
         sonnet::input
+        sonnet::ui
+        imgui::imgui
     )
 else()
     add_executable(demo

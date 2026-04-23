@@ -39,6 +39,7 @@ target_link_libraries(sonnet_renderer_vulkan
         spirv-reflect-static      # SPIR-V reflection for descriptor layouts
         glfw                      # glfwCreateWindowSurface (via GLFWWindow)
         spdlog::spdlog
+        imgui::imgui              # ImGui_ImplVulkan_RenderDrawData in renderImGui
 )
 
 # glslang + SPIRV from the Vulkan SDK. Prefer the modern CMake-module targets

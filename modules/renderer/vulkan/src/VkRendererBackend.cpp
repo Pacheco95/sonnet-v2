@@ -12,6 +12,9 @@
 
 #include <sonnet/window/GLFWWindow.h>
 
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
+
 #include "VkBindState.h"
 #include "VkCommandContext.h"
 #include "VkDescriptorManager.h"
@@ -47,6 +50,9 @@ VkRendererBackend::VkRendererBackend(api::window::IWindow &window,
 VkRendererBackend::~VkRendererBackend() {
     if (m_device) m_device->waitIdle();
     // Destruction order matters: resources → pipelines/descriptors → device → instance.
+    if (m_imguiPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(m_device->logical(), m_imguiPool, nullptr);
+    }
     m_descriptorManager.reset();
     m_pipelineCache.reset();
     m_gpuMeshFactory.reset();
@@ -99,6 +105,19 @@ void VkRendererBackend::initialize() {
     m_gpuMeshFactory      = std::make_unique<VkGpuMeshFactory>(*this);
     m_pipelineCache       = std::make_unique<PipelineCache>(*m_device);
     m_descriptorManager   = std::make_unique<DescriptorManager>(*m_device, *m_bindState);
+
+    // 8. Dedicated descriptor pool for ImGui's textures. imgui_impl_vulkan
+    // allocates one combined-image-sampler set per texture.
+    const std::array<VkDescriptorPoolSize, 1> imguiPoolSizes{
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+    };
+    VkDescriptorPoolCreateInfo imguiPoolInfo{};
+    imguiPoolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    imguiPoolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    imguiPoolInfo.maxSets       = 1024;
+    imguiPoolInfo.poolSizeCount = static_cast<std::uint32_t>(imguiPoolSizes.size());
+    imguiPoolInfo.pPoolSizes    = imguiPoolSizes.data();
+    VK_CHECK(vkCreateDescriptorPool(m_device->logical(), &imguiPoolInfo, nullptr, &m_imguiPool));
 
     m_initialized = true;
     spdlog::info("[vulkan] VkRendererBackend initialized");
@@ -383,6 +402,29 @@ api::render::IShaderCompiler     &VkRendererBackend::shaderCompiler()     { retu
 api::render::ITextureFactory     &VkRendererBackend::textureFactory()     { return *m_textureFactory; }
 api::render::IRenderTargetFactory &VkRendererBackend::renderTargetFactory() { return *m_renderTargetFactory; }
 api::render::IGpuMeshFactory     &VkRendererBackend::gpuMeshFactory()     { return *m_gpuMeshFactory; }
+
+// ── ImGui integration ──────────────────────────────────────────────────────────
+
+VkRendererBackend::ImGuiInitInfo VkRendererBackend::imGuiInitInfo() const {
+    return ImGuiInitInfo{
+        .instance       = m_instance->handle(),
+        .physicalDevice = m_device->physical(),
+        .device         = m_device->logical(),
+        .queueFamily    = m_device->graphicsFamily(),
+        .queue          = m_device->graphicsQueue(),
+        .renderPass     = m_swapchain->defaultRenderPass(),
+        .minImageCount  = m_swapchain->imageCount(),
+        .imageCount     = m_swapchain->imageCount(),
+        .descriptorPool = m_imguiPool,
+    };
+}
+
+void VkRendererBackend::renderImGui() {
+    if (!m_framePending) return;
+    auto *draw = ImGui::GetDrawData();
+    if (!draw || draw->CmdListsCount == 0) return;
+    ImGui_ImplVulkan_RenderDrawData(draw, m_commandContext->current().cmd);
+}
 
 // ── Private ────────────────────────────────────────────────────────────────────
 

@@ -8,6 +8,10 @@
 #  include <glad/glad.h>
 #endif
 
+#if defined(SONNET_USE_VULKAN)
+#  include <imgui_impl_vulkan.h>
+#endif
+
 #include <stdexcept>
 
 namespace sonnet::ui {
@@ -16,9 +20,8 @@ ImGuiLayer::~ImGuiLayer() {
     if (m_initialized) shutdown();
 }
 
-void ImGuiLayer::init([[maybe_unused]] GLFWwindow *window,
-                      [[maybe_unused]] const char *glslVersion) {
-#if defined(SONNET_USE_OPENGL)
+namespace {
+void setupImGuiContext() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
@@ -28,48 +31,80 @@ void ImGuiLayer::init([[maybe_unused]] GLFWwindow *window,
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     ImGui::StyleColorsDark();
+}
+} // namespace
 
+#if defined(SONNET_USE_OPENGL)
+void ImGuiLayer::init(GLFWwindow *window, const char *glslVersion) {
+    setupImGuiContext();
     ImGui_ImplGlfw_InitForOpenGL(window, /*install_callbacks=*/true);
     ImGui_ImplOpenGL3_Init(glslVersion);
+    m_initialized = true;
+}
+#endif
+
+#if defined(SONNET_USE_VULKAN)
+void ImGuiLayer::init(GLFWwindow *window, const VulkanInitInfo &info) {
+    setupImGuiContext();
+    ImGui_ImplGlfw_InitForVulkan(window, /*install_callbacks=*/true);
+
+    // The docking branch of ImGui (≥ 2025/09/26) splits pipeline fields into
+    // PipelineInfoMain; the top-level ApiVersion is also required.
+    ImGui_ImplVulkan_InitInfo vkInfo{};
+    vkInfo.ApiVersion                 = VK_API_VERSION_1_2;
+    vkInfo.Instance                   = info.instance;
+    vkInfo.PhysicalDevice             = info.physicalDevice;
+    vkInfo.Device                     = info.device;
+    vkInfo.QueueFamily                = info.queueFamily;
+    vkInfo.Queue                      = info.queue;
+    vkInfo.DescriptorPool             = info.descriptorPool;
+    vkInfo.MinImageCount              = info.minImageCount;
+    vkInfo.ImageCount                 = info.imageCount;
+    vkInfo.PipelineInfoMain.RenderPass  = info.renderPass;
+    vkInfo.PipelineInfoMain.Subpass     = 0;
+    vkInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    ImGui_ImplVulkan_Init(&vkInfo);
 
     m_initialized = true;
-#else
-    // Vulkan: ImGui wiring comes online in Phase 4.
-    throw std::runtime_error("ImGuiLayer::init — Vulkan ImGui integration lands in Phase 4");
-#endif
 }
+#endif
 
 void ImGuiLayer::shutdown() {
     if (!m_initialized) return;
 #if defined(SONNET_USE_OPENGL)
     ImGui_ImplOpenGL3_Shutdown();
+#endif
+#if defined(SONNET_USE_VULKAN)
+    ImGui_ImplVulkan_Shutdown();
+#endif
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-#endif
     m_initialized = false;
 }
 
 void ImGuiLayer::begin() {
 #if defined(SONNET_USE_OPENGL)
-    // ImGui colors are already in sRGB. Disable the automatic linear→sRGB
-    // conversion so they are not gamma-encoded a second time.
+    // ImGui colors are already in sRGB. Disable automatic linear→sRGB so
+    // they are not gamma-encoded a second time.
     m_srgbWasEnabled = glIsEnabled(GL_FRAMEBUFFER_SRGB);
     glDisable(GL_FRAMEBUFFER_SRGB);
 
     ImGui_ImplOpenGL3_NewFrame();
+#elif defined(SONNET_USE_VULKAN)
+    ImGui_ImplVulkan_NewFrame();
+#endif
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-#endif
 }
 
 void ImGuiLayer::end() {
-#if defined(SONNET_USE_OPENGL)
     ImGui::Render();
+#if defined(SONNET_USE_OPENGL)
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    // Restore the sRGB state for subsequent 3D rendering.
     if (m_srgbWasEnabled) glEnable(GL_FRAMEBUFFER_SRGB);
 #endif
+    // Under Vulkan, VkRendererBackend::renderImGui() picks up the draw data
+    // and records it into the current command buffer.
 }
 
 } // namespace sonnet::ui
