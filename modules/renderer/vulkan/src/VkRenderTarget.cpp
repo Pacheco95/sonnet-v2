@@ -5,6 +5,8 @@
 #include "VkSamplerCache.h"
 #include "VkUtils.h"
 
+#include <cstring>
+
 namespace sonnet::renderer::vulkan {
 
 namespace {
@@ -65,8 +67,96 @@ void VkRenderTarget::bind() const {
 }
 
 std::array<std::uint8_t, 4> VkRenderTarget::readPixelRGBA8(
-    std::uint32_t /*attachmentIndex*/, std::uint32_t /*x*/, std::uint32_t /*y*/) const {
-    SN_VK_TODO("VkRenderTarget::readPixelRGBA8 — needs vkCmdCopyImageToBuffer + fence-wait + map (Phase 7b).");
+    std::uint32_t attachmentIndex, std::uint32_t x, std::uint32_t y) const {
+    if (attachmentIndex >= m_colors.size()) {
+        throw VulkanError("VkRenderTarget::readPixelRGBA8: attachment out of range");
+    }
+    const auto *tex = m_colors[attachmentIndex].get();
+
+    // Caller expects RGBA8 bytes. We only guarantee byte-exact layout when
+    // the attachment itself is R8G8B8A8_UNORM/SRGB — otherwise we'd need to
+    // convert. The demo's picking pass uses RGBA8, so this is a cheap assert.
+    if (tex->format() != VK_FORMAT_R8G8B8A8_UNORM &&
+        tex->format() != VK_FORMAT_R8G8B8A8_SRGB &&
+        tex->format() != VK_FORMAT_B8G8R8A8_UNORM &&
+        tex->format() != VK_FORMAT_B8G8R8A8_SRGB) {
+        throw VulkanError("VkRenderTarget::readPixelRGBA8: non-RGBA8 attachment "
+                          "(readback conversion not implemented)");
+    }
+
+    // Staging buffer sized for one pixel. HOST_VISIBLE + mapped so the CPU
+    // can read directly after the copy completes.
+    VkBufferCreateInfo bufInfo{};
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size  = 4;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+    VmaAllocationCreateInfo allocCreate{};
+    allocCreate.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    allocCreate.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
+                      | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    VkBuffer          staging      = VK_NULL_HANDLE;
+    VmaAllocation     stagingAlloc = VK_NULL_HANDLE;
+    VmaAllocationInfo stagingInfo{};
+    VK_CHECK(vmaCreateBuffer(m_device.allocator(), &bufInfo, &allocCreate,
+                             &staging, &stagingAlloc, &stagingInfo));
+
+    // Our color attachments rest in SHADER_READ_ONLY_OPTIMAL after each pass
+    // (see buildRenderPass initial/final layouts). Move to TRANSFER_SRC,
+    // copy, move back.
+    m_device.runOneShot([&](VkCommandBuffer cmd) {
+        VkImageMemoryBarrier toSrc{};
+        toSrc.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toSrc.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+        toSrc.image                           = tex->image();
+        toSrc.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        toSrc.subresourceRange.levelCount     = 1;
+        toSrc.subresourceRange.layerCount     = 1;
+        toSrc.oldLayout                       = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toSrc.newLayout                       = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toSrc.srcAccessMask                   = VK_ACCESS_SHADER_READ_BIT;
+        toSrc.dstAccessMask                   = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+        VkBufferImageCopy copy{};
+        copy.bufferOffset                    = 0;
+        copy.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy.imageSubresource.layerCount     = 1;
+        copy.imageOffset                     = {static_cast<std::int32_t>(x),
+                                                 static_cast<std::int32_t>(y), 0};
+        copy.imageExtent                     = {1, 1, 1};
+        vkCmdCopyImageToBuffer(cmd, tex->image(),
+                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                staging, 1, &copy);
+
+        VkImageMemoryBarrier back = toSrc;
+        back.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        back.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        back.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &back);
+    });
+
+    // runOneShot waits on the queue, so the staging bytes are now valid.
+    std::array<std::uint8_t, 4> pixel{};
+    std::memcpy(pixel.data(), stagingInfo.pMappedData, 4);
+    vmaDestroyBuffer(m_device.allocator(), staging, stagingAlloc);
+
+    // BGRA formats need a channel swap back to RGBA byte order so callers
+    // see the same layout the OpenGL backend returns.
+    if (tex->format() == VK_FORMAT_B8G8R8A8_UNORM ||
+        tex->format() == VK_FORMAT_B8G8R8A8_SRGB) {
+        std::swap(pixel[0], pixel[2]);
+    }
+    return pixel;
 }
 
 void VkRenderTarget::buildRenderPass() {
