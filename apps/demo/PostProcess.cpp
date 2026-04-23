@@ -228,7 +228,7 @@ PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
 
     // ── Picking (public — used by EditorUI) ───────────────────────────────────
     const auto pickingShader = shaders.compile(
-        DEMO_ASSETS_DIR "/shaders/shadow.vert",
+        DEMO_ASSETS_DIR "/shaders/picking.vert",
         DEMO_ASSETS_DIR "/shaders/picking.frag");
     pickingMatTmpl = renderer.createMaterial(MaterialTemplate{
         .shaderHandle = pickingShader,
