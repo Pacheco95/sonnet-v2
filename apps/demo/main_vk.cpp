@@ -47,8 +47,15 @@ constexpr const char *kFragSrc = R"glsl(
 layout(location = 0) in vec4 vColor;
 layout(location = 0) out vec4 fragColor;
 
+// Exercises the set=2 PerDraw UBO path: a tint applied per draw.
+// Routed through VkRendererBackend::setUniform → VkUniformRing →
+// per-draw descriptor set.
+layout(std140, set = 2, binding = 0) uniform PerDraw {
+    vec4 uTint;
+} pd;
+
 void main() {
-    fragColor = vColor;
+    fragColor = vColor * pd.uTint;
 }
 )glsl";
 
@@ -132,9 +139,15 @@ int main() {
         vis->bind();
         vbo->bind();
         ibo->bind();
-        if (const auto it = shader->getUniforms().find("uModel");
-            it != shader->getUniforms().end()) {
+        const auto &uniforms = shader->getUniforms();
+        if (const auto it = uniforms.find("uModel"); it != uniforms.end()) {
             backend->setUniform(it->second.location, sonnet::core::UniformValue{model});
+        }
+        // PerDraw UBO: gentle bluish tint that breathes with the rotation.
+        const float t = 0.5f + 0.5f * std::sin(glm::radians(rot));
+        const glm::vec4 tint{1.0f - 0.25f * t, 1.0f - 0.25f * t, 1.0f + 0.15f * t, 1.0f};
+        if (const auto it = uniforms.find("uTint"); it != uniforms.end()) {
+            backend->setUniform(it->second.location, sonnet::core::UniformValue{tint});
         }
         backend->drawIndexed(3);
 

@@ -69,6 +69,11 @@ struct ShaderReflection {
     // Parallel table: entries[uniformDescriptor.location] carries the Vulkan-
     // specific routing info (push-constant offset, sampler binding, etc.).
     std::vector<ShaderUniformEntry> entries;
+
+    // Size in bytes of the set=2, binding=0 "PerDraw" UBO, or 0 if the shader
+    // doesn't declare one. drawIndexed allocates this many bytes from the
+    // per-frame uniform ring and writes them before binding set=2.
+    std::uint32_t perDrawUboSize = 0;
 };
 
 struct BindState;

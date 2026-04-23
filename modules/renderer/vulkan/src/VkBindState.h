@@ -21,6 +21,7 @@ struct BindState {
     static constexpr std::uint32_t kMaxUboBindings      = 8;
     static constexpr std::uint32_t kMaxMaterialTextures = 16;
     static constexpr std::uint32_t kPushConstantBytes   = 128;
+    static constexpr std::uint32_t kPerDrawStagingBytes = 1024;
 
     VkBuffer                              currentVertex = VK_NULL_HANDLE;
     VkBuffer                              currentIndex  = VK_NULL_HANDLE;
@@ -39,6 +40,11 @@ struct BindState {
     std::array<std::uint8_t, kPushConstantBytes> pushConstantStaging{};
     std::uint32_t                                pushConstantDirtyEnd = 0;
 
+    // Staged PerDraw UBO bytes + hwm. Flushed to the uniform ring in drawIndexed
+    // when the shader declares a set=2 UBO.
+    std::array<std::uint8_t, kPerDrawStagingBytes> perDrawStaging{};
+    std::uint32_t                                  perDrawDirtyEnd = 0;
+
     void reset() {
         currentVertex      = VK_NULL_HANDLE;
         currentIndex       = VK_NULL_HANDLE;
@@ -48,14 +54,16 @@ struct BindState {
         uboSizes.fill(0);
         materialTextures.fill(nullptr);
         pushConstantDirtyEnd = 0;
+        perDrawDirtyEnd      = 0;
     }
 
-    // Call after the draw consumes pending push/sampler state; keeps the
+    // Call after the draw consumes pending per-draw state; keeps the
     // shader+buffer bindings so subsequent draws from the same material
     // don't need to re-record them.
     void clearDrawScopedState() {
         materialTextures.fill(nullptr);
         pushConstantDirtyEnd = 0;
+        perDrawDirtyEnd      = 0;
     }
 };
 

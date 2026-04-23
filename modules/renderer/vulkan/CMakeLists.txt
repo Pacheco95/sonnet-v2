@@ -15,6 +15,7 @@ add_library(sonnet_renderer_vulkan STATIC
     src/VkRenderTargetFactory.cpp
     src/VkPipelineCache.cpp
     src/VkDescriptorManager.cpp
+    src/VkUniformRing.cpp
     src/VkFormatMap.cpp
     src/VkUtils.cpp
 )

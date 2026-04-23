@@ -43,6 +43,14 @@ public:
     // the shader has no set=1 bindings.
     VkDescriptorSet allocateMaterialSet1(const VkShader &shader);
 
+    // Allocate+update a set=2 descriptor set for `shader`, pointing the
+    // single UBO binding at the given ring buffer + offset + range. Returns
+    // NULL when the shader has no set=2 bindings.
+    VkDescriptorSet allocatePerDrawSet2(const VkShader &shader,
+                                        VkBuffer ringBuffer,
+                                        VkDeviceSize offset,
+                                        VkDeviceSize range);
+
 private:
     Device    &m_device;
     BindState &m_bindState;

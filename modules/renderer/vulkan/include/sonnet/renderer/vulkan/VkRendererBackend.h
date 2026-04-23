@@ -23,6 +23,7 @@ class VkGpuMeshFactory;
 class SamplerCache;
 class PipelineCache;
 class DescriptorManager;
+class UniformRing;
 struct BindState;
 
 // VkRendererBackend — Vulkan implementation of IRendererBackend.
@@ -117,6 +118,7 @@ private:
     std::unique_ptr<VkGpuMeshFactory>             m_gpuMeshFactory;
     std::unique_ptr<PipelineCache>                m_pipelineCache;
     std::unique_ptr<DescriptorManager>            m_descriptorManager;
+    std::unique_ptr<UniformRing>                  m_uniformRing;
 
     bool           m_initialized       = false;
     glm::uvec2     m_lastFbSize{0, 0};

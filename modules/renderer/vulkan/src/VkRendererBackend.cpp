@@ -23,6 +23,7 @@
 #include "VkPipelineCache.h"
 #include "VkSamplerCache.h"
 #include "VkSwapchain.h"
+#include "VkUniformRing.h"
 #include "VkUtils.h"
 
 #include <array>
@@ -53,6 +54,7 @@ VkRendererBackend::~VkRendererBackend() {
     if (m_imguiPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device->logical(), m_imguiPool, nullptr);
     }
+    m_uniformRing.reset();
     m_descriptorManager.reset();
     m_pipelineCache.reset();
     m_gpuMeshFactory.reset();
@@ -105,6 +107,9 @@ void VkRendererBackend::initialize() {
     m_gpuMeshFactory      = std::make_unique<VkGpuMeshFactory>(*this);
     m_pipelineCache       = std::make_unique<PipelineCache>(*m_device);
     m_descriptorManager   = std::make_unique<DescriptorManager>(*m_device, *m_bindState);
+    // 2 MiB per frame is comfortable for per-draw UBOs in a demo-scale scene;
+    // UniformRing aligns to minUniformBufferOffsetAlignment internally.
+    m_uniformRing         = std::make_unique<UniformRing>(*m_device, 2u * 1024u * 1024u);
 
     // 8. Dedicated descriptor pool for ImGui's textures. imgui_impl_vulkan
     // allocates one combined-image-sampler set per texture.
@@ -144,8 +149,10 @@ void VkRendererBackend::beginFrame() {
 
     auto &frame = m_commandContext->beginFrame();
 
-    // Reset this frame's descriptor pool before any draw allocates from it.
+    // Reset this frame's descriptor pool + uniform ring before any draw
+    // allocates from them.
     m_descriptorManager->beginFrame(m_commandContext->currentFrameIndex());
+    m_uniformRing->beginFrame(m_commandContext->currentFrameIndex());
 
     std::uint32_t imageIx = 0;
     const VkResult acq = m_swapchain->acquireNextImage(frame.imageAvailable, imageIx);
@@ -306,22 +313,34 @@ void VkRendererBackend::setUniform(UniformLocation location, const core::Uniform
     const auto *entry = shader->uniformEntry(static_cast<int>(location));
     if (!entry) return;
 
+    auto writeBytes = [&](std::uint8_t *dst, std::uint32_t size) {
+        std::visit([&](auto &&v) {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, core::Sampler>) {
+                // Samplers don't live in UBO/push ranges — ignore.
+            } else {
+                const std::size_t n = std::min<std::size_t>(size, sizeof(T));
+                std::memcpy(dst, &v, n);
+            }
+        }, value);
+    };
+
     switch (entry->kind) {
         case ShaderUniformKind::PushConstant: {
             if (entry->offset + entry->size > BindState::kPushConstantBytes) return;
-            auto *dst = m_bindState->pushConstantStaging.data() + entry->offset;
-            std::visit([&](auto &&v) {
-                using T = std::decay_t<decltype(v)>;
-                if constexpr (std::is_same_v<T, core::Sampler>) {
-                    // Samplers don't live in push constants — ignore.
-                } else {
-                    const std::size_t n = std::min<std::size_t>(entry->size, sizeof(T));
-                    std::memcpy(dst, &v, n);
-                }
-            }, value);
+            writeBytes(m_bindState->pushConstantStaging.data() + entry->offset, entry->size);
             const auto end = entry->offset + entry->size;
             if (end > m_bindState->pushConstantDirtyEnd) {
                 m_bindState->pushConstantDirtyEnd = end;
+            }
+            return;
+        }
+        case ShaderUniformKind::PerDrawUbo: {
+            if (entry->offset + entry->size > BindState::kPerDrawStagingBytes) return;
+            writeBytes(m_bindState->perDrawStaging.data() + entry->offset, entry->size);
+            const auto end = entry->offset + entry->size;
+            if (end > m_bindState->perDrawDirtyEnd) {
+                m_bindState->perDrawDirtyEnd = end;
             }
             return;
         }
@@ -329,9 +348,6 @@ void VkRendererBackend::setUniform(UniformLocation location, const core::Uniform
             // Binding is determined by the slot passed to texture->bind in
             // Renderer::bindMaterial; the Sampler value itself is irrelevant
             // under Vulkan.
-            return;
-        case ShaderUniformKind::PerDrawUbo:
-            // Phase 3+ — implement ring-buffer write here.
             return;
         case ShaderUniformKind::Unknown:
             return;
@@ -371,6 +387,21 @@ void VkRendererBackend::drawIndexed(std::size_t indexCount) {
         matSet != VK_NULL_HANDLE) {
         vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 shader->pipelineLayout(), 1, 1, &matSet, 0, nullptr);
+    }
+
+    // Bind set 2 (PerDraw UBO) if the shader declares one: copy staged bytes
+    // into the frame ring, allocate a descriptor set pointing to that slice,
+    // and bind it.
+    if (const auto perDrawSize = shader->reflection().perDrawUboSize;
+        perDrawSize > 0) {
+        auto ring = m_uniformRing->allocate(perDrawSize);
+        std::memcpy(ring.mapped, m_bindState->perDrawStaging.data(), perDrawSize);
+        if (VkDescriptorSet pdSet = m_descriptorManager->allocatePerDrawSet2(
+                *shader, m_uniformRing->buffer(), ring.offset, perDrawSize);
+            pdSet != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    shader->pipelineLayout(), 2, 1, &pdSet, 0, nullptr);
+        }
     }
 
     // Flush push constants for any uniform writes that happened since the

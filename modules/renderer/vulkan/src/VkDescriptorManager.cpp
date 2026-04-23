@@ -165,4 +165,42 @@ VkDescriptorSet DescriptorManager::allocateMaterialSet1(const VkShader &shader) 
     return set;
 }
 
+VkDescriptorSet DescriptorManager::allocatePerDrawSet2(const VkShader &shader,
+                                                       VkBuffer ringBuffer,
+                                                       VkDeviceSize offset,
+                                                       VkDeviceSize range) {
+    const auto &layouts = shader.setLayouts();
+    if (layouts.size() < 3) return VK_NULL_HANDLE;
+
+    const auto &reflection = shader.reflection();
+    if (reflection.setBindings.size() < 3 || reflection.setBindings[2].empty()) {
+        return VK_NULL_HANDLE;
+    }
+
+    VkDescriptorSetAllocateInfo alloc{};
+    alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool     = m_pools[m_currentFrame];
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts        = &layouts[2];
+
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateDescriptorSets(m_device.logical(), &alloc, &set));
+
+    VkDescriptorBufferInfo bi{};
+    bi.buffer = ringBuffer;
+    bi.offset = offset;
+    bi.range  = range;
+
+    VkWriteDescriptorSet w{};
+    w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet          = set;
+    w.dstBinding      = 0;
+    w.descriptorCount = 1;
+    w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    w.pBufferInfo     = &bi;
+    vkUpdateDescriptorSets(m_device.logical(), 1, &w, 0, nullptr);
+
+    return set;
+}
+
 } // namespace sonnet::renderer::vulkan

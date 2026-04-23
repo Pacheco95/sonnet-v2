@@ -331,6 +331,54 @@ void reflectMaterialSamplers(ShaderReflection &out,
     }
 }
 
+// Register a PerDraw UBO member (set=2, binding=0): one entry per struct
+// field, encoding its byte offset so setUniform can memcpy into the ring.
+void registerPerDrawMember(core::UniformDescriptorMap &names,
+                           std::vector<ShaderUniformEntry> &entries,
+                           const std::string &name,
+                           const SpvReflectBlockVariable &member) {
+    if (names.find(name) != names.end()) return; // already registered in other stage.
+
+    ShaderUniformEntry e{};
+    e.kind   = ShaderUniformKind::PerDrawUbo;
+    e.offset = member.offset;
+    e.size   = member.size;
+
+    const int loc = static_cast<int>(entries.size());
+    entries.push_back(e);
+
+    core::UniformDescriptor d{};
+    d.type     = uniformTypeFromBlockVariable(member);
+    d.location = loc;
+    names[name] = d;
+}
+
+void reflectPerDrawUbo(ShaderReflection &out,
+                       const SpvReflectShaderModule *mod) {
+    std::uint32_t count = 0;
+    spvReflectEnumerateDescriptorBindings(mod, &count, nullptr);
+    std::vector<SpvReflectDescriptorBinding *> bindings(count);
+    spvReflectEnumerateDescriptorBindings(mod, &count, bindings.data());
+
+    for (const auto *b : bindings) {
+        if (b->set != 2 || b->binding != 0) continue;
+        if (b->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER) continue;
+
+        // Register each member of the block as a PerDrawUbo uniform.
+        for (std::uint32_t i = 0; i < b->block.member_count; ++i) {
+            const auto &m = b->block.members[i];
+            const std::string name = m.name ? m.name : "";
+            if (name.empty()) continue;
+            registerPerDrawMember(out.uniforms, out.entries, name, m);
+        }
+        // Track total size — use the block's reported size (includes trailing
+        // padding). Take the max across stages if both declare it.
+        if (b->block.size > out.perDrawUboSize) {
+            out.perDrawUboSize = b->block.size;
+        }
+    }
+}
+
 } // namespace
 
 VkShaderCompiler::VkShaderCompiler(Device &device, BindState &bindState)
@@ -361,11 +409,13 @@ std::unique_ptr<api::render::IShader> VkShaderCompiler::operator()(
 
     // Populate UniformDescriptorMap + parallel entries table so setUniform()
     // can route values correctly. Push constants first (per member), then
-    // set=1 samplers.
+    // set=1 samplers, then set=2 PerDraw UBO members.
     reflectPushConstants(reflection, vertMod.get(), VK_SHADER_STAGE_VERTEX_BIT);
     reflectPushConstants(reflection, fragMod.get(), VK_SHADER_STAGE_FRAGMENT_BIT);
     reflectMaterialSamplers(reflection, vertMod.get());
     reflectMaterialSamplers(reflection, fragMod.get());
+    reflectPerDrawUbo(reflection, vertMod.get());
+    reflectPerDrawUbo(reflection, fragMod.get());
 
     return std::make_unique<VkShader>(m_device, m_bindState,
                                        vertexSrc, fragmentSrc,
