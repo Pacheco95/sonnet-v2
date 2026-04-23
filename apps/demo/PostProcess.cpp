@@ -157,7 +157,7 @@ PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
 
     // ── Outline mask (static mesh) ────────────────────────────────────────────
     const auto outlineMaskShader = shaders.compile(
-        DEMO_ASSETS_DIR "/shaders/shadow.vert",
+        DEMO_ASSETS_DIR "/shaders/picking.vert",
         DEMO_ASSETS_DIR "/shaders/outline_mask.frag");
     const auto outlineMaskTmpl = renderer.createMaterial(MaterialTemplate{
         .shaderHandle = outlineMaskShader,
