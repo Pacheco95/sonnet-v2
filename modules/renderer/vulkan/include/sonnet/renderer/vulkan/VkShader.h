@@ -47,9 +47,11 @@ struct ShaderReflection {
     core::UniformDescriptorMap uniforms;
 };
 
+struct BindState;
+
 class VkShader final : public api::render::IShader {
 public:
-    VkShader(Device &device,
+    VkShader(Device &device, BindState &bindState,
              std::string vertexSource, std::string fragmentSource,
              std::vector<std::uint32_t> vertexSpirv,
              std::vector<std::uint32_t> fragmentSpirv,
@@ -79,6 +81,7 @@ public:
 
 private:
     Device                           &m_device;
+    BindState                        &m_bindState;
     std::string                       m_vertexSource;
     std::string                       m_fragmentSource;
     std::vector<std::uint32_t>        m_vertSpirv;

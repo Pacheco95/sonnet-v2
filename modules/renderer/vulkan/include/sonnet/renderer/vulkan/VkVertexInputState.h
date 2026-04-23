@@ -9,22 +9,25 @@
 
 namespace sonnet::renderer::vulkan {
 
+struct BindState;
+
 // Vulkan has no VAO equivalent — vertex input is baked into each VkPipeline
-// at pipeline-creation time. This class is therefore a pure data holder:
-// it converts the engine's VertexLayout into the Vulkan descriptor structs
+// at pipeline-creation time. This class holds the Vulkan descriptor structs
 // consumed by VkGraphicsPipelineCreateInfo.pVertexInputState. bind/unbind
-// are no-ops kept for IVertexInputState API compatibility.
+// record "this is current" into the shared BindState; drawIndexed reads
+// that to look up pipelines.
 class VkVertexInputState final : public api::render::IVertexInputState {
 public:
-    explicit VkVertexInputState(const api::render::VertexLayout &layout);
+    VkVertexInputState(const api::render::VertexLayout &layout, BindState &bindState);
 
-    void bind()   const override; // no-op
-    void unbind() const override; // no-op
+    void bind()   const override; // sets bindState.currentVertexInput = this
+    void unbind() const override;
 
     [[nodiscard]] const VkVertexInputBindingDescription                &bindingDescription()    const { return m_binding; }
     [[nodiscard]] const std::vector<VkVertexInputAttributeDescription> &attributeDescriptions() const { return m_attributes; }
 
 private:
+    BindState                                     &m_bindState;
     VkVertexInputBindingDescription                m_binding{};
     std::vector<VkVertexInputAttributeDescription> m_attributes;
 };

@@ -7,13 +7,15 @@
 
 namespace sonnet::renderer::vulkan {
 
-// Mutable state shared between IGpuBuffer::bind()/bindBase() call sites and
-// the backend's drawIndexed(). Tracks "which VkBuffer is the current vertex
-// buffer / index buffer" and which VkBuffer is bound to each UBO slot. Owned
-// by VkRendererBackend; referenced by every VkGpuBuffer it creates.
-//
-// This is a Phase-2 stand-in for a proper descriptor-set-layout-aware
-// binding tracker, which lands in Phase 3 alongside the pipeline cache.
+class VkShader;
+class VkVertexInputState;
+
+// Mutable state the backend's drawIndexed() reads to assemble a draw:
+// which buffers are bound, which shader is active, which vertex input is
+// current, and (Phase 3c) which UBOs populate set=0. IGpuBuffer::bind,
+// IGpuBuffer::bindBase, IShader::bind, and IVertexInputState::bind all write
+// here. Owned by VkRendererBackend; passed by reference to the objects that
+// mutate it. This is Vulkan's emulation of OpenGL's context-binding model.
 struct BindState {
     static constexpr std::uint32_t kMaxUboBindings = 8;
 
@@ -23,9 +25,14 @@ struct BindState {
     std::array<VkBuffer, kMaxUboBindings> ubos{};
     std::array<VkDeviceSize, kMaxUboBindings> uboSizes{};
 
+    const VkShader           *currentShader     = nullptr;
+    const VkVertexInputState *currentVertexInput = nullptr;
+
     void reset() {
-        currentVertex = VK_NULL_HANDLE;
-        currentIndex  = VK_NULL_HANDLE;
+        currentVertex      = VK_NULL_HANDLE;
+        currentIndex       = VK_NULL_HANDLE;
+        currentShader      = nullptr;
+        currentVertexInput = nullptr;
         ubos.fill(VK_NULL_HANDLE);
         uboSizes.fill(0);
     }

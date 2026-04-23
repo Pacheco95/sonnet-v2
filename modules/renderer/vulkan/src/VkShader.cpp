@@ -1,5 +1,6 @@
 #include <sonnet/renderer/vulkan/VkShader.h>
 
+#include "VkBindState.h"
 #include "VkDevice.h"
 #include "VkUtils.h"
 
@@ -32,12 +33,13 @@ VkDescriptorSetLayout createSetLayout(VkDevice device,
 
 } // namespace
 
-VkShader::VkShader(Device &device,
+VkShader::VkShader(Device &device, BindState &bindState,
                    std::string vertexSource, std::string fragmentSource,
                    std::vector<std::uint32_t> vertexSpirv,
                    std::vector<std::uint32_t> fragmentSpirv,
                    ShaderReflection reflection)
     : m_device(device),
+      m_bindState(bindState),
       m_vertexSource(std::move(vertexSource)),
       m_fragmentSource(std::move(fragmentSource)),
       m_vertSpirv(std::move(vertexSpirv)),
@@ -75,7 +77,9 @@ VkShader::~VkShader() {
     if (m_fragModule != VK_NULL_HANDLE) vkDestroyShaderModule(d, m_fragModule, nullptr);
 }
 
-void VkShader::bind()   const {}
-void VkShader::unbind() const {}
+void VkShader::bind()   const { m_bindState.currentShader = this; }
+void VkShader::unbind() const {
+    if (m_bindState.currentShader == this) m_bindState.currentShader = nullptr;
+}
 
 } // namespace sonnet::renderer::vulkan

@@ -2,6 +2,7 @@
 #include <sonnet/renderer/vulkan/VkGpuBuffer.h>
 #include <sonnet/renderer/vulkan/VkGpuMeshFactory.h>
 #include <sonnet/renderer/vulkan/VkRenderTargetFactory.h>
+#include <sonnet/renderer/vulkan/VkShader.h>
 #include <sonnet/renderer/vulkan/VkShaderCompiler.h>
 #include <sonnet/renderer/vulkan/VkTextureFactory.h>
 #include <sonnet/renderer/vulkan/VkVertexInputState.h>
@@ -10,8 +11,10 @@
 
 #include "VkBindState.h"
 #include "VkCommandContext.h"
+#include "VkDescriptorManager.h"
 #include "VkDevice.h"
 #include "VkInstance.h"
+#include "VkPipelineCache.h"
 #include "VkSamplerCache.h"
 #include "VkSwapchain.h"
 #include "VkUtils.h"
@@ -40,7 +43,9 @@ VkRendererBackend::VkRendererBackend(api::window::IWindow &window,
 
 VkRendererBackend::~VkRendererBackend() {
     if (m_device) m_device->waitIdle();
-    // Destruction order matters: resource factories → swapchain/cmdctx → device → instance.
+    // Destruction order matters: resources → pipelines/descriptors → device → instance.
+    m_descriptorManager.reset();
+    m_pipelineCache.reset();
     m_gpuMeshFactory.reset();
     m_renderTargetFactory.reset();
     m_textureFactory.reset();
@@ -83,12 +88,14 @@ void VkRendererBackend::initialize() {
     // 6. Shared per-frame binding state consumed by VkGpuBuffer.
     m_bindState = std::make_unique<BindState>();
 
-    // 7. Factories. All live implementations — Phase 2d.
-    m_shaderCompiler      = std::make_unique<VkShaderCompiler>(*m_device);
+    // 7. Factories + pipeline cache + descriptor manager.
+    m_shaderCompiler      = std::make_unique<VkShaderCompiler>(*m_device, *m_bindState);
     m_samplerCache        = std::make_unique<SamplerCache>(*m_device);
     m_textureFactory      = std::make_unique<VkTextureFactory>(*m_device, *m_samplerCache);
     m_renderTargetFactory = std::make_unique<VkRenderTargetFactory>(*m_device, *m_samplerCache);
     m_gpuMeshFactory      = std::make_unique<VkGpuMeshFactory>(*this);
+    m_pipelineCache       = std::make_unique<PipelineCache>(*m_device);
+    m_descriptorManager   = std::make_unique<DescriptorManager>(*m_device, *m_bindState);
 
     m_initialized = true;
     spdlog::info("[vulkan] VkRendererBackend initialized");
@@ -114,6 +121,9 @@ void VkRendererBackend::beginFrame() {
     }
 
     auto &frame = m_commandContext->beginFrame();
+
+    // Reset this frame's descriptor pool before any draw allocates from it.
+    m_descriptorManager->beginFrame(m_commandContext->currentFrameIndex());
 
     std::uint32_t imageIx = 0;
     const VkResult acq = m_swapchain->acquireNextImage(frame.imageAvailable, imageIx);
@@ -149,6 +159,13 @@ void VkRendererBackend::beginFrame() {
     rp.clearValueCount   = 2;
     rp.pClearValues      = clears;
     vkCmdBeginRenderPass(frame.cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Reset frame-scoped binding state and record the active pass so that
+    // drawIndexed can key pipelines correctly.
+    m_bindState->reset();
+    m_activeRenderPass = m_swapchain->defaultRenderPass();
+    m_activeColorCount = 1;
+    m_activeHasDepth   = true;
 
     m_framePending = true;
 }
@@ -220,14 +237,27 @@ void VkRendererBackend::setViewport(std::uint32_t width, std::uint32_t height) {
 
 // ── Pipeline state (Phase 3) ───────────────────────────────────────────────────
 
-void VkRendererBackend::setFillMode(api::render::FillMode) {}
-void VkRendererBackend::setDepthTest(bool) {}
-void VkRendererBackend::setDepthWrite(bool) {}
-void VkRendererBackend::setDepthFunc(api::render::DepthFunction) {}
-void VkRendererBackend::setCull(api::render::CullMode) {}
-void VkRendererBackend::setBlend(bool) {}
-void VkRendererBackend::setBlendFunc(api::render::BlendFactor, api::render::BlendFactor) {}
-void VkRendererBackend::setSRGB(bool) {}
+void VkRendererBackend::setFillMode(api::render::FillMode mode)        { m_renderState.fill = mode; }
+void VkRendererBackend::setDepthTest(bool enabled)                      { m_renderState.depthTest = enabled; }
+void VkRendererBackend::setDepthWrite(bool enabled)                     { m_renderState.depthWrite = enabled; }
+void VkRendererBackend::setDepthFunc(api::render::DepthFunction func)   { m_renderState.depthFunc = func; }
+void VkRendererBackend::setCull(api::render::CullMode mode)             { m_renderState.cull = mode; }
+void VkRendererBackend::setBlend(bool enabled) {
+    // Blend mode selection happens via setBlendFunc; enabled is redundant info
+    // under Vulkan but may disable blending if paired with Opaque factors.
+    if (!enabled) m_renderState.blend = api::render::BlendMode::Opaque;
+}
+void VkRendererBackend::setBlendFunc(api::render::BlendFactor src, api::render::BlendFactor dst) {
+    // Map the (src, dst) pair back onto the BlendMode enum; Renderer uses a
+    // fixed mapping (Alpha = SrcAlpha/OneMinusSrcAlpha, Additive = One/One).
+    using F = api::render::BlendFactor;
+    if      (src == F::SrcAlpha && dst == F::OneMinusSrcAlpha) m_renderState.blend = api::render::BlendMode::Alpha;
+    else if (src == F::One      && dst == F::One)              m_renderState.blend = api::render::BlendMode::Additive;
+    else                                                        m_renderState.blend = api::render::BlendMode::Opaque;
+}
+void VkRendererBackend::setSRGB(bool) {
+    // Swapchain sRGB is baked into the image format; no-op per-draw.
+}
 
 // ── Resource creation (Phase 2) ────────────────────────────────────────────────
 
@@ -243,7 +273,7 @@ std::unique_ptr<api::render::IVertexInputState> VkRendererBackend::createVertexI
     // Vertex+index buffer references are unused in Vulkan's "VAO" — the actual
     // binding happens inside drawIndexed via vkCmdBindVertexBuffers /
     // vkCmdBindIndexBuffer (consumed from BindState that GpuMesh::bind writes).
-    return std::make_unique<VkVertexInputState>(layout);
+    return std::make_unique<VkVertexInputState>(layout, *m_bindState);
 }
 
 // ── Uniforms & drawing (Phase 3) ───────────────────────────────────────────────
@@ -252,8 +282,40 @@ void VkRendererBackend::setUniform(UniformLocation, const core::UniformValue &) 
     SN_VK_TODO("setUniform — Phase 3");
 }
 
-void VkRendererBackend::drawIndexed(std::size_t) {
-    SN_VK_TODO("drawIndexed — Phase 3");
+void VkRendererBackend::drawIndexed(std::size_t indexCount) {
+    if (!m_framePending) return;
+
+    const VkShader           *shader = m_bindState->currentShader;
+    const VkVertexInputState *vis    = m_bindState->currentVertexInput;
+    if (!shader || !vis) {
+        // Frontend hasn't bound a shader+VIS yet; skip gracefully.
+        return;
+    }
+    if (m_bindState->currentVertex == VK_NULL_HANDLE ||
+        m_bindState->currentIndex  == VK_NULL_HANDLE) {
+        return;
+    }
+
+    auto &frame = m_commandContext->current();
+
+    VkPipeline pipeline = m_pipelineCache->getOrCreate(
+        *shader, m_renderState, *vis, m_activeRenderPass,
+        m_activeColorCount, m_activeHasDepth);
+    vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
+    // Bind set 0 (frame-wide UBOs: Camera + Lights) if the shader declares one.
+    VkDescriptorSet frameSet = m_descriptorManager->allocateFrameSet0(*shader);
+    if (frameSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                shader->pipelineLayout(), 0, 1, &frameSet, 0, nullptr);
+    }
+
+    const VkBuffer     vbo       = m_bindState->currentVertex;
+    const VkDeviceSize vboOffset = 0;
+    vkCmdBindVertexBuffers(frame.cmd, 0, 1, &vbo, &vboOffset);
+    vkCmdBindIndexBuffer(frame.cmd, m_bindState->currentIndex, 0, m_bindState->indexType);
+
+    vkCmdDrawIndexed(frame.cmd, static_cast<std::uint32_t>(indexCount), 1, 0, 0, 0);
 }
 
 // ── Factory accessors ──────────────────────────────────────────────────────────

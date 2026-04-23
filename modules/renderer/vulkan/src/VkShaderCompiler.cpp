@@ -208,7 +208,8 @@ std::vector<ShaderVertexAttribute> extractVertexInputs(const SpvReflectShaderMod
 
 } // namespace
 
-VkShaderCompiler::VkShaderCompiler(Device &device) : m_device(device) {
+VkShaderCompiler::VkShaderCompiler(Device &device, BindState &bindState)
+    : m_device(device), m_bindState(bindState) {
     if (glslang_initialize_process() == 0) {
         throw VulkanError("glslang_initialize_process failed");
     }
@@ -234,7 +235,7 @@ std::unique_ptr<api::render::IShader> VkShaderCompiler::operator()(
     reflection.vertexAttributes = extractVertexInputs(vertMod.get());
     // UniformDescriptorMap population deferred to Phase 3c/3d.
 
-    return std::make_unique<VkShader>(m_device,
+    return std::make_unique<VkShader>(m_device, m_bindState,
                                        vertexSrc, fragmentSrc,
                                        std::move(vertSpv), std::move(fragSpv),
                                        std::move(reflection));

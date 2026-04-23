@@ -12,9 +12,11 @@ class Device;
 // One instance per VkRendererBackend; calls glslang_initialize_process on
 // construction and glslang_finalize_process on destruction. Compilation
 // failures throw VulkanError carrying the glslang log.
+struct BindState;
+
 class VkShaderCompiler final : public api::render::IShaderCompiler {
 public:
-    explicit VkShaderCompiler(Device &device);
+    VkShaderCompiler(Device &device, BindState &bindState);
     ~VkShaderCompiler() override;
 
     VkShaderCompiler(const VkShaderCompiler &)            = delete;
@@ -24,7 +26,8 @@ public:
         const std::string &vertexSrc, const std::string &fragmentSrc) const override;
 
 private:
-    Device &m_device;
+    Device    &m_device;
+    BindState &m_bindState;
 };
 
 } // namespace sonnet::renderer::vulkan

@@ -2,8 +2,11 @@
 
 #include <sonnet/api/render/BackendCreateOptions.h>
 #include <sonnet/api/render/IRendererBackend.h>
+#include <sonnet/api/render/RenderState.h>
 #include <sonnet/api/window/IWindow.h>
 #include <sonnet/core/Macros.h>
+
+#include <vulkan/vulkan.h>
 
 #include <memory>
 
@@ -18,6 +21,8 @@ class VkRenderTargetFactory;
 class VkShaderCompiler;
 class VkGpuMeshFactory;
 class SamplerCache;
+class PipelineCache;
+class DescriptorManager;
 struct BindState;
 
 // VkRendererBackend — Vulkan implementation of IRendererBackend.
@@ -91,12 +96,22 @@ private:
     std::unique_ptr<VkTextureFactory>             m_textureFactory;
     std::unique_ptr<VkRenderTargetFactory>        m_renderTargetFactory;
     std::unique_ptr<VkGpuMeshFactory>             m_gpuMeshFactory;
+    std::unique_ptr<PipelineCache>                m_pipelineCache;
+    std::unique_ptr<DescriptorManager>            m_descriptorManager;
 
     bool           m_initialized       = false;
     glm::uvec2     m_lastFbSize{0, 0};
     bool           m_framePending      = false; // set true between beginFrame/endFrame
     bool           m_resizeRequested   = false;
     std::uint32_t  m_pendingImageIndex = 0;
+
+    // Live render state accumulated via setDepthTest/setBlend/etc. Consumed by
+    // drawIndexed when it looks up the pipeline.
+    api::render::RenderState m_renderState{};
+    // Active pass for pipeline keying.
+    VkRenderPass             m_activeRenderPass  = VK_NULL_HANDLE;
+    std::uint32_t            m_activeColorCount  = 1;
+    bool                     m_activeHasDepth    = true;
 
     void recreateSwapchain();
 };

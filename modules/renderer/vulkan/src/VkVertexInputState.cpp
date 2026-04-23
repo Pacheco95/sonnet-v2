@@ -1,5 +1,6 @@
 #include <sonnet/renderer/vulkan/VkVertexInputState.h>
 
+#include "VkBindState.h"
 #include "VkUtils.h"
 
 #include <cstdint>
@@ -25,7 +26,9 @@ constexpr VkFormat vertexFormatFor() {
 
 } // namespace
 
-VkVertexInputState::VkVertexInputState(const api::render::VertexLayout &layout) {
+VkVertexInputState::VkVertexInputState(const api::render::VertexLayout &layout,
+                                       BindState &bindState)
+    : m_bindState(bindState) {
     m_binding.binding   = 0;
     m_binding.stride    = static_cast<std::uint32_t>(layout.getStride());
     m_binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -45,7 +48,9 @@ VkVertexInputState::VkVertexInputState(const api::render::VertexLayout &layout) 
     }
 }
 
-void VkVertexInputState::bind()   const {}
-void VkVertexInputState::unbind() const {}
+void VkVertexInputState::bind()   const { m_bindState.currentVertexInput = this; }
+void VkVertexInputState::unbind() const {
+    if (m_bindState.currentVertexInput == this) m_bindState.currentVertexInput = nullptr;
+}
 
 } // namespace sonnet::renderer::vulkan
