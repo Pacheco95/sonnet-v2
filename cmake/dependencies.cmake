@@ -2,8 +2,10 @@ include(FetchContent)
 
 # Vulkan is located first because ImGui (below) and the ui/renderer/vulkan
 # modules (via target_link_libraries) reference Vulkan::Vulkan conditionally.
+# glslang + SPIRV components are requested so the Vulkan backend can do
+# runtime GLSL → SPIR-V via the C interface (preserves hot-reload).
 if(SONNET_USE_VULKAN)
-    find_package(Vulkan REQUIRED)
+    find_package(Vulkan REQUIRED COMPONENTS glslang SPIRV-Tools)
 endif()
 
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)

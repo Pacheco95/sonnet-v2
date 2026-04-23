@@ -80,11 +80,13 @@ Device::Device(Instance &instance, VkSurfaceKHR surface) {
 
     createLogicalDevice();
     createAllocator(instance);
+    createOneShotPool();
 }
 
 Device::~Device() {
-    if (m_allocator != VK_NULL_HANDLE) vmaDestroyAllocator(m_allocator);
-    if (m_device    != VK_NULL_HANDLE) vkDestroyDevice(m_device, nullptr);
+    if (m_oneShotPool != VK_NULL_HANDLE) vkDestroyCommandPool(m_device, m_oneShotPool, nullptr);
+    if (m_allocator   != VK_NULL_HANDLE) vmaDestroyAllocator(m_allocator);
+    if (m_device      != VK_NULL_HANDLE) vkDestroyDevice(m_device, nullptr);
 }
 
 void Device::pickPhysicalDevice(Instance &instance, VkSurfaceKHR surface) {
@@ -175,6 +177,44 @@ void Device::createAllocator(Instance &instance) {
 
 void Device::waitIdle() const {
     if (m_device != VK_NULL_HANDLE) vkDeviceWaitIdle(m_device);
+}
+
+void Device::createOneShotPool() {
+    VkCommandPoolCreateInfo info{};
+    info.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    info.flags            = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+                          | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    info.queueFamilyIndex = m_graphicsFamily;
+    VK_CHECK(vkCreateCommandPool(m_device, &info, nullptr, &m_oneShotPool));
+}
+
+void Device::runOneShot(const std::function<void(VkCommandBuffer)> &recorder) {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+
+    VkCommandBufferAllocateInfo alloc{};
+    alloc.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc.commandPool        = m_oneShotPool;
+    alloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    VK_CHECK(vkAllocateCommandBuffers(m_device, &alloc, &cmd));
+
+    VkCommandBufferBeginInfo begin{};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VK_CHECK(vkBeginCommandBuffer(cmd, &begin));
+
+    recorder(cmd);
+
+    VK_CHECK(vkEndCommandBuffer(cmd));
+
+    VkSubmitInfo submit{};
+    submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers    = &cmd;
+    VK_CHECK(vkQueueSubmit(m_graphicsQueue, 1, &submit, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueWaitIdle(m_graphicsQueue));
+
+    vkFreeCommandBuffers(m_device, m_oneShotPool, 1, &cmd);
 }
 
 } // namespace sonnet::renderer::vulkan

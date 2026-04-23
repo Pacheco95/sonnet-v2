@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <functional>
 
 namespace sonnet::renderer::vulkan {
 
@@ -31,6 +32,13 @@ public:
     // Convenience: wait until all queued work completes.
     void waitIdle() const;
 
+    // Synchronous one-shot command recording + submit + wait. Allocates a
+    // transient primary command buffer from an internal pool, invokes `recorder`
+    // between vkBegin/EndCommandBuffer, submits to the graphics queue, and
+    // blocks until completion. Used by resource constructors (buffer/texture
+    // staging uploads) where latency doesn't matter.
+    void runOneShot(const std::function<void(VkCommandBuffer)> &recorder);
+
 private:
     void pickPhysicalDevice(Instance &instance, VkSurfaceKHR surface);
     void createLogicalDevice();
@@ -44,6 +52,11 @@ private:
     std::uint32_t    m_presentFamily  = 0;
     VmaAllocator     m_allocator      = VK_NULL_HANDLE;
     bool             m_portabilitySubsetEnabled = false;
+
+    // Transient pool for one-shot uploads (one per logical device).
+    VkCommandPool    m_oneShotPool    = VK_NULL_HANDLE;
+
+    void createOneShotPool();
 };
 
 } // namespace sonnet::renderer::vulkan

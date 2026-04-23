@@ -13,10 +13,12 @@ class Instance;
 class Device;
 class Swapchain;
 class CommandContext;
-class TextureFactory;
-class RenderTargetFactory;
-class ShaderCompiler;
-class GpuMeshFactory;
+class VkTextureFactory;
+class VkRenderTargetFactory;
+class VkShaderCompiler;
+class VkGpuMeshFactory;
+class SamplerCache;
+struct BindState;
 
 // VkRendererBackend — Vulkan implementation of IRendererBackend.
 //
@@ -82,13 +84,13 @@ private:
     std::unique_ptr<Device>                       m_device;
     std::unique_ptr<Swapchain>                    m_swapchain;
     std::unique_ptr<CommandContext>               m_commandContext;
+    std::unique_ptr<BindState>                    m_bindState;
 
-    // Factory stubs kept as unique_ptr so their concrete types can evolve
-    // across phases without touching the header.
-    std::unique_ptr<ShaderCompiler>               m_shaderCompiler;
-    std::unique_ptr<TextureFactory>               m_textureFactory;
-    std::unique_ptr<RenderTargetFactory>          m_renderTargetFactory;
-    std::unique_ptr<GpuMeshFactory>               m_gpuMeshFactory;
+    std::unique_ptr<VkShaderCompiler>             m_shaderCompiler;
+    std::unique_ptr<SamplerCache>                 m_samplerCache;
+    std::unique_ptr<VkTextureFactory>             m_textureFactory;
+    std::unique_ptr<VkRenderTargetFactory>        m_renderTargetFactory;
+    std::unique_ptr<VkGpuMeshFactory>             m_gpuMeshFactory;
 
     bool           m_initialized       = false;
     glm::uvec2     m_lastFbSize{0, 0};

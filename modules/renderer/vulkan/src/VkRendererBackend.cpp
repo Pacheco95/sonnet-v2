@@ -1,11 +1,18 @@
 #include <sonnet/renderer/vulkan/VkRendererBackend.h>
+#include <sonnet/renderer/vulkan/VkGpuBuffer.h>
+#include <sonnet/renderer/vulkan/VkGpuMeshFactory.h>
+#include <sonnet/renderer/vulkan/VkRenderTargetFactory.h>
+#include <sonnet/renderer/vulkan/VkShaderCompiler.h>
+#include <sonnet/renderer/vulkan/VkTextureFactory.h>
+#include <sonnet/renderer/vulkan/VkVertexInputState.h>
 
 #include <sonnet/window/GLFWWindow.h>
 
+#include "VkBindState.h"
 #include "VkCommandContext.h"
 #include "VkDevice.h"
 #include "VkInstance.h"
-#include "VkStubs.h"
+#include "VkSamplerCache.h"
 #include "VkSwapchain.h"
 #include "VkUtils.h"
 
@@ -33,9 +40,15 @@ VkRendererBackend::VkRendererBackend(api::window::IWindow &window,
 
 VkRendererBackend::~VkRendererBackend() {
     if (m_device) m_device->waitIdle();
-    // Destruction order matters: swapchain/cmdctx before device; device before instance.
+    // Destruction order matters: resource factories → swapchain/cmdctx → device → instance.
+    m_gpuMeshFactory.reset();
+    m_renderTargetFactory.reset();
+    m_textureFactory.reset();
+    m_samplerCache.reset();
+    m_shaderCompiler.reset();
     m_commandContext.reset();
     m_swapchain.reset();
+    m_bindState.reset();
     m_device.reset();
     m_instance.reset();
 }
@@ -67,11 +80,15 @@ void VkRendererBackend::initialize() {
     // 5. Per-frame command context + sync.
     m_commandContext = std::make_unique<CommandContext>(*m_device);
 
-    // 6. Phase-1 factory stubs. Replaced in Phase 2.
-    m_shaderCompiler      = std::make_unique<ShaderCompiler>();
-    m_textureFactory      = std::make_unique<TextureFactory>();
-    m_renderTargetFactory = std::make_unique<RenderTargetFactory>();
-    m_gpuMeshFactory      = std::make_unique<GpuMeshFactory>();
+    // 6. Shared per-frame binding state consumed by VkGpuBuffer.
+    m_bindState = std::make_unique<BindState>();
+
+    // 7. Factories. All live implementations — Phase 2d.
+    m_shaderCompiler      = std::make_unique<VkShaderCompiler>(*m_device);
+    m_samplerCache        = std::make_unique<SamplerCache>(*m_device);
+    m_textureFactory      = std::make_unique<VkTextureFactory>(*m_device, *m_samplerCache);
+    m_renderTargetFactory = std::make_unique<VkRenderTargetFactory>(*m_device, *m_samplerCache);
+    m_gpuMeshFactory      = std::make_unique<VkGpuMeshFactory>(*this);
 
     m_initialized = true;
     spdlog::info("[vulkan] VkRendererBackend initialized");
@@ -215,15 +232,18 @@ void VkRendererBackend::setSRGB(bool) {}
 // ── Resource creation (Phase 2) ────────────────────────────────────────────────
 
 std::unique_ptr<api::render::IGpuBuffer> VkRendererBackend::createBuffer(
-    api::render::BufferType, const void *, std::size_t) {
-    SN_VK_TODO("createBuffer — Phase 2");
+    api::render::BufferType type, const void *data, std::size_t size) {
+    return std::make_unique<VkGpuBuffer>(*m_device, *m_bindState, type, data, size);
 }
 
 std::unique_ptr<api::render::IVertexInputState> VkRendererBackend::createVertexInputState(
-    const api::render::VertexLayout &,
-    const api::render::IGpuBuffer   &,
-    const api::render::IGpuBuffer   &) {
-    SN_VK_TODO("createVertexInputState — Phase 2");
+    const api::render::VertexLayout &layout,
+    const api::render::IGpuBuffer   &/*vertexBuffer*/,
+    const api::render::IGpuBuffer   &/*indexBuffer*/) {
+    // Vertex+index buffer references are unused in Vulkan's "VAO" — the actual
+    // binding happens inside drawIndexed via vkCmdBindVertexBuffers /
+    // vkCmdBindIndexBuffer (consumed from BindState that GpuMesh::bind writes).
+    return std::make_unique<VkVertexInputState>(layout);
 }
 
 // ── Uniforms & drawing (Phase 3) ───────────────────────────────────────────────
