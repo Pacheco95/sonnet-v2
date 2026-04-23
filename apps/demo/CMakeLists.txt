@@ -23,6 +23,7 @@ target_link_libraries(demo PRIVATE
     glm::glm
     glad
     stb::image
+    nlohmann_json::nlohmann_json
 )
 
 # Bake the source-tree assets path into the binary so the demo can always find

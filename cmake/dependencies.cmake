@@ -38,6 +38,9 @@ set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_OBJ_IMPORTER   ON  CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_GLTF_IMPORTER  ON  CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_FBX_IMPORTER   OFF CACHE BOOL "" FORCE)
+# Assimp's bundled zlib defines fdopen as a null macro on Apple targets,
+# which conflicts with the macOS SDK's stdio.h declaration. Use system zlib instead.
+set(ASSIMP_BUILD_ZLIB            OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(
     assimp
