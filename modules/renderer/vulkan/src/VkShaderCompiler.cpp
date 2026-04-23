@@ -18,6 +18,15 @@ namespace sonnet::renderer::vulkan {
 
 namespace {
 
+// Preamble injected after #version in every shader compiled under Vulkan.
+// Defines VULKAN so shaders can conditionally declare push-constant /
+// set=2 PerDraw UBO blocks, and SET(n,b) so `layout(SET(0,0)) ...`
+// desugars to `layout(set = 0, binding = 0) ...` for Vulkan and to the
+// binding-only form for OpenGL (preamble set in GlShaderCompiler).
+constexpr const char *kVulkanPreamble =
+    "#define VULKAN 1\n"
+    "#define SET(n,b) set = n, binding = b\n";
+
 std::vector<std::uint32_t> compileStage(glslang_stage_t stage,
                                         const std::string &source,
                                         const char *stageName) {
@@ -42,6 +51,10 @@ std::vector<std::uint32_t> compileStage(glslang_stage_t stage,
     }
 
     struct Cleanup { glslang_shader_t *s; ~Cleanup() { glslang_shader_delete(s); } } cleanup{shader};
+
+    // Inject VULKAN + SET() macros after #version so shaders can write
+    // Vulkan-only constructs (push_constant, set=N) alongside the OpenGL path.
+    glslang_shader_set_preamble(shader, kVulkanPreamble);
 
     if (!glslang_shader_preprocess(shader, &input)) {
         throw VulkanError(std::string("glslang preprocess (") + stageName + "): " +
