@@ -1,4 +1,4 @@
-#version 330 core
+#version 460 core
 out vec4 fragColor;
 
 uniform vec3  uEmissiveColor;    // linear HDR color (values > 1.0 will bloom)

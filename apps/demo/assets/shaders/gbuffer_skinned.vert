@@ -1,4 +1,4 @@
-#version 330 core
+#version 460 core
 // Vertex layout: position(0), texcoord(2), normal(3), tangent(4), bitangent(5),
 //                boneIndices(6), boneWeights(7)
 layout(location = 0) in vec3  aPosition;

@@ -1,4 +1,4 @@
-#version 330 core
+#version 460 core
 // G-buffer fragment shader for purely emissive objects (e.g. lamp sphere).
 // Writes zero albedo/roughness and the emissive colour into the G-buffer;
 // the deferred lighting pass will add the emissive directly to the final colour.
