@@ -206,6 +206,131 @@ std::vector<ShaderVertexAttribute> extractVertexInputs(const SpvReflectShaderMod
     return out;
 }
 
+// Map a SPIRV-Reflect block-variable numeric traits to an engine UniformType.
+// Best-effort; returns Float for unknown shapes (caller can still write bytes).
+core::UniformType uniformTypeFromBlockVariable(const SpvReflectBlockVariable &m) {
+    const auto *td = m.type_description;
+    if (!td) return core::UniformType::Float;
+
+    const auto &tr = m.numeric;
+
+    // Matrix: 4x4 of float → Mat4.
+    if (tr.matrix.column_count == 4 && tr.matrix.row_count == 4 &&
+        tr.scalar.width == 32 && (tr.scalar.signedness == 0)) {
+        return core::UniformType::Mat4;
+    }
+
+    // Vectors.
+    if (tr.matrix.column_count == 0 && tr.vector.component_count > 1) {
+        switch (tr.vector.component_count) {
+            case 2: return core::UniformType::Vec2;
+            case 3: return core::UniformType::Vec3;
+            case 4: return core::UniformType::Vec4;
+            default: break;
+        }
+    }
+
+    // Scalars.
+    if (tr.matrix.column_count == 0 && tr.vector.component_count <= 1) {
+        // SpvReflectNumericTraits::Scalar.signedness is 1 for int, 0 for unsigned/float.
+        // Float has scalar.width == 32 && signedness == 0 and no OpTypeInt parent; but
+        // SPIRV-Reflect doesn't expose that directly in the numeric traits, so use
+        // type_description flags instead.
+        if (td->type_flags & SPV_REFLECT_TYPE_FLAG_FLOAT) return core::UniformType::Float;
+        if (td->type_flags & SPV_REFLECT_TYPE_FLAG_INT)   return core::UniformType::Int;
+    }
+
+    return core::UniformType::Float;
+}
+
+// Register a single push-constant member: add/update entry in the parallel
+// tables. If the same uniform name already exists (because the other stage
+// also declared it) we union the stage flags onto the existing entry.
+void registerPushMember(core::UniformDescriptorMap &names,
+                        std::vector<ShaderUniformEntry> &entries,
+                        const std::string &name,
+                        const SpvReflectBlockVariable &member,
+                        VkShaderStageFlagBits stage) {
+    if (auto it = names.find(name); it != names.end()) {
+        auto &existing = entries[static_cast<std::size_t>(it->second.location)];
+        if (existing.kind == ShaderUniformKind::PushConstant) {
+            existing.stageFlags |= stage;
+            return;
+        }
+    }
+
+    ShaderUniformEntry e{};
+    e.kind       = ShaderUniformKind::PushConstant;
+    e.offset     = member.offset;
+    e.size       = member.size;
+    e.stageFlags = stage;
+
+    const int loc = static_cast<int>(entries.size());
+    entries.push_back(e);
+
+    core::UniformDescriptor d{};
+    d.type     = uniformTypeFromBlockVariable(member);
+    d.location = loc;
+    names[name] = d;
+}
+
+void registerSampler(core::UniformDescriptorMap &names,
+                     std::vector<ShaderUniformEntry> &entries,
+                     const std::string &name,
+                     std::uint32_t set,
+                     std::uint32_t binding) {
+    if (names.find(name) != names.end()) return; // already registered (other stage)
+
+    ShaderUniformEntry e{};
+    e.kind    = ShaderUniformKind::MaterialSampler;
+    e.set     = set;
+    e.binding = binding;
+
+    const int loc = static_cast<int>(entries.size());
+    entries.push_back(e);
+
+    core::UniformDescriptor d{};
+    d.type     = core::UniformType::Sampler;
+    d.location = loc;
+    names[name] = d;
+}
+
+void reflectPushConstants(ShaderReflection &out,
+                          const SpvReflectShaderModule *mod,
+                          VkShaderStageFlagBits stage) {
+    std::uint32_t count = 0;
+    spvReflectEnumeratePushConstantBlocks(mod, &count, nullptr);
+    std::vector<SpvReflectBlockVariable *> blocks(count);
+    spvReflectEnumeratePushConstantBlocks(mod, &count, blocks.data());
+
+    for (const auto *b : blocks) {
+        // Walk members (flat — nested structs inside push constants are rare).
+        for (std::uint32_t i = 0; i < b->member_count; ++i) {
+            const auto &m = b->members[i];
+            const std::string name = m.name ? m.name : "";
+            if (name.empty()) continue;
+            registerPushMember(out.uniforms, out.entries, name, m, stage);
+        }
+    }
+}
+
+void reflectMaterialSamplers(ShaderReflection &out,
+                             const SpvReflectShaderModule *mod) {
+    std::uint32_t count = 0;
+    spvReflectEnumerateDescriptorBindings(mod, &count, nullptr);
+    std::vector<SpvReflectDescriptorBinding *> bindings(count);
+    spvReflectEnumerateDescriptorBindings(mod, &count, bindings.data());
+
+    for (const auto *b : bindings) {
+        if (b->set != 1) continue;
+        if (b->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+            b->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE) continue;
+        const std::string name = b->name ? b->name : "";
+        if (name.empty()) continue;
+        registerSampler(out.uniforms, out.entries, name, b->set, b->binding);
+    }
+}
+
 } // namespace
 
 VkShaderCompiler::VkShaderCompiler(Device &device, BindState &bindState)
@@ -233,7 +358,14 @@ std::unique_ptr<api::render::IShader> VkShaderCompiler::operator()(
     mergePushConstants(reflection.pushConstantRanges, vertMod.get(), VK_SHADER_STAGE_VERTEX_BIT);
     mergePushConstants(reflection.pushConstantRanges, fragMod.get(), VK_SHADER_STAGE_FRAGMENT_BIT);
     reflection.vertexAttributes = extractVertexInputs(vertMod.get());
-    // UniformDescriptorMap population deferred to Phase 3c/3d.
+
+    // Populate UniformDescriptorMap + parallel entries table so setUniform()
+    // can route values correctly. Push constants first (per member), then
+    // set=1 samplers.
+    reflectPushConstants(reflection, vertMod.get(), VK_SHADER_STAGE_VERTEX_BIT);
+    reflectPushConstants(reflection, fragMod.get(), VK_SHADER_STAGE_FRAGMENT_BIT);
+    reflectMaterialSamplers(reflection, vertMod.get());
+    reflectMaterialSamplers(reflection, fragMod.get());
 
     return std::make_unique<VkShader>(m_device, m_bindState,
                                        vertexSrc, fragmentSrc,

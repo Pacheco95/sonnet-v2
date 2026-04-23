@@ -1,5 +1,6 @@
 #include <sonnet/renderer/vulkan/VkTexture2D.h>
 
+#include "VkBindState.h"
 #include "VkDevice.h"
 #include "VkFormatMap.h"
 #include "VkSamplerCache.h"
@@ -73,11 +74,11 @@ void transitionImageLayout(VkCommandBuffer cmd, VkImage image,
 
 } // namespace
 
-VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers,
+VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bindState,
                          const api::render::TextureDesc &desc,
                          const api::render::SamplerDesc &sampler,
                          const api::render::CPUTextureBuffer &data)
-    : m_device(device), m_desc(desc), m_sampler(sampler) {
+    : m_device(device), m_bindState(bindState), m_desc(desc), m_sampler(sampler) {
     if (desc.type != api::render::TextureType::Texture2D) {
         throw VulkanError("VkTexture2D: CubeMap upload path not implemented (Phase 7 / IBL)");
     }
@@ -173,10 +174,10 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers,
     m_vkSampler = samplers.get(sampler);
 }
 
-VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers,
+VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bindState,
                          const api::render::TextureDesc &desc,
                          const api::render::SamplerDesc &sampler)
-    : m_device(device), m_desc(desc), m_sampler(sampler) {
+    : m_device(device), m_bindState(bindState), m_desc(desc), m_sampler(sampler) {
     if (desc.type != api::render::TextureType::Texture2D) {
         throw VulkanError("VkTexture2D(allocate-only): CubeMap path not implemented");
     }
@@ -240,13 +241,20 @@ VkTexture2D::~VkTexture2D() {
     if (m_image != VK_NULL_HANDLE) vmaDestroyImage(m_device.allocator(), m_image, m_alloc);
 }
 
-void VkTexture2D::bind(std::uint8_t /*slot*/)   const {
-    // Phase 2: no-op. Material-descriptor building in Phase 3 reads the view+sampler
-    // directly from the texture's accessors.
+void VkTexture2D::bind(std::uint8_t slot) const {
+    // The slot value Renderer::bindMaterial iterates (0, 1, 2, ...) matches
+    // the descriptor binding in set=1. Record it for drawIndexed to consume
+    // when building the material descriptor set.
+    if (slot < BindState::kMaxMaterialTextures) {
+        m_bindState.materialTextures[slot] = this;
+    }
 }
 
-void VkTexture2D::unbind(std::uint8_t /*slot*/) const {
-    // No-op (matching bind).
+void VkTexture2D::unbind(std::uint8_t slot) const {
+    if (slot < BindState::kMaxMaterialTextures &&
+        m_bindState.materialTextures[slot] == this) {
+        m_bindState.materialTextures[slot] = nullptr;
+    }
 }
 
 void VkTexture2D::generateMipmaps(VkCommandBuffer cmd) {

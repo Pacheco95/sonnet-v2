@@ -9,6 +9,7 @@ namespace sonnet::renderer::vulkan {
 
 class Device;
 class SamplerCache;
+struct BindState;
 
 // VMA-backed 2D image with a paired image view and a cached sampler.
 // Phase 2 handles the Texture2D variant; cubemap faces throw until a
@@ -17,7 +18,7 @@ class VkTexture2D final : public api::render::ITexture {
 public:
     // Upload from CPU data. Performs a one-shot staging copy and (optional)
     // mipmap generation via vkCmdBlitImage.
-    VkTexture2D(Device &device, SamplerCache &samplers,
+    VkTexture2D(Device &device, SamplerCache &samplers, BindState &bindState,
                 const api::render::TextureDesc &desc,
                 const api::render::SamplerDesc &sampler,
                 const api::render::CPUTextureBuffer &data);
@@ -26,7 +27,7 @@ public:
     // layout is SHADER_READ_ONLY_OPTIMAL for color+sampled images and
     // DEPTH_STENCIL_ATTACHMENT_OPTIMAL for depth images (transitioned once
     // at construction via a one-shot barrier).
-    VkTexture2D(Device &device, SamplerCache &samplers,
+    VkTexture2D(Device &device, SamplerCache &samplers, BindState &bindState,
                 const api::render::TextureDesc &desc,
                 const api::render::SamplerDesc &sampler);
 
@@ -62,6 +63,7 @@ private:
     void generateMipmaps(VkCommandBuffer cmd);
 
     Device                    &m_device;
+    BindState                 &m_bindState;
     api::render::TextureDesc   m_desc;
     api::render::SamplerDesc   m_sampler;
 

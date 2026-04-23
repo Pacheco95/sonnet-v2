@@ -38,6 +38,11 @@ public:
     // set=0 bindings, in which case drawIndexed should skip the bind step.
     VkDescriptorSet allocateFrameSet0(const VkShader &shader);
 
+    // Allocate+update a set=1 descriptor set for `shader`, populated from the
+    // materialTextures slots recorded by VkTexture2D::bind. Returns NULL when
+    // the shader has no set=1 bindings.
+    VkDescriptorSet allocateMaterialSet1(const VkShader &shader);
+
 private:
     Device    &m_device;
     BindState &m_bindState;

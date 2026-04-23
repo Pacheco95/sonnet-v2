@@ -1,6 +1,7 @@
 #include "VkDescriptorManager.h"
 
 #include <sonnet/renderer/vulkan/VkShader.h>
+#include <sonnet/renderer/vulkan/VkTexture2D.h>
 
 #include "VkBindState.h"
 #include "VkDevice.h"
@@ -13,18 +14,20 @@ namespace sonnet::renderer::vulkan {
 
 namespace {
 
-// Per-frame pool capacity. Sized to comfortably cover every draw-time set=0
+// Per-frame pool capacity. Sized to comfortably cover every draw-time set
 // allocation in a frame without needing auto-grow logic in v1. Increase
-// these constants if drawIndexed ever returns OUT_OF_POOL_MEMORY.
-constexpr std::uint32_t kMaxSetsPerFrame             = 256;
-constexpr std::uint32_t kMaxUniformBuffersPerFrame   = 1024;
+// if drawIndexed ever returns OUT_OF_POOL_MEMORY.
+constexpr std::uint32_t kMaxSetsPerFrame                  = 512;
+constexpr std::uint32_t kMaxUniformBuffersPerFrame        = 1024;
+constexpr std::uint32_t kMaxCombinedImageSamplersPerFrame = 4096;
 
 } // namespace
 
 DescriptorManager::DescriptorManager(Device &device, BindState &bindState)
     : m_device(device), m_bindState(bindState) {
-    const std::array<VkDescriptorPoolSize, 1> sizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kMaxUniformBuffersPerFrame},
+    const std::array<VkDescriptorPoolSize, 2> sizes{
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         kMaxUniformBuffersPerFrame},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxCombinedImageSamplersPerFrame},
     };
 
     VkDescriptorPoolCreateInfo info{};
@@ -94,6 +97,62 @@ VkDescriptorSet DescriptorManager::allocateFrameSet0(const VkShader &shader) {
         w.descriptorCount = 1;
         w.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w.pBufferInfo     = &bufferInfos.back();
+        writes.push_back(w);
+    }
+
+    if (!writes.empty()) {
+        vkUpdateDescriptorSets(m_device.logical(),
+                               static_cast<std::uint32_t>(writes.size()),
+                               writes.data(), 0, nullptr);
+    }
+
+    return set;
+}
+
+VkDescriptorSet DescriptorManager::allocateMaterialSet1(const VkShader &shader) {
+    const auto &layouts = shader.setLayouts();
+    if (layouts.size() < 2) return VK_NULL_HANDLE;
+
+    const auto &reflection = shader.reflection();
+    if (reflection.setBindings.size() < 2 || reflection.setBindings[1].empty()) {
+        return VK_NULL_HANDLE;
+    }
+
+    VkDescriptorSetAllocateInfo alloc{};
+    alloc.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc.descriptorPool     = m_pools[m_currentFrame];
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts        = &layouts[1];
+
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    VK_CHECK(vkAllocateDescriptorSets(m_device.logical(), &alloc, &set));
+
+    std::vector<VkDescriptorImageInfo> imageInfos;
+    std::vector<VkWriteDescriptorSet>  writes;
+    imageInfos.reserve(reflection.setBindings[1].size());
+    writes.reserve(reflection.setBindings[1].size());
+
+    for (const auto &b : reflection.setBindings[1]) {
+        if (b.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+            b.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) continue;
+        if (b.binding >= BindState::kMaxMaterialTextures) continue;
+
+        const auto *tex = m_bindState.materialTextures[b.binding];
+        if (!tex) continue;
+
+        VkDescriptorImageInfo ii{};
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ii.imageView   = tex->imageView();
+        ii.sampler     = tex->sampler();
+        imageInfos.push_back(ii);
+
+        VkWriteDescriptorSet w{};
+        w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstSet          = set;
+        w.dstBinding      = b.binding;
+        w.descriptorCount = 1;
+        w.descriptorType  = b.descriptorType;
+        w.pImageInfo      = &imageInfos.back();
         writes.push_back(w);
     }
 

@@ -12,6 +12,7 @@ namespace sonnet::renderer::vulkan {
 
 class Device;
 class SamplerCache;
+struct BindState;
 
 // Offscreen render target: owns its color and optional depth VkTexture2D
 // attachments, plus a VkRenderPass and VkFramebuffer built at construction
@@ -21,7 +22,7 @@ class SamplerCache;
 // transitioned via a barrier when sampled — Phase 3 wires that up).
 class VkRenderTarget final : public api::render::IRenderTarget {
 public:
-    VkRenderTarget(Device &device, SamplerCache &samplers,
+    VkRenderTarget(Device &device, SamplerCache &samplers, BindState &bindState,
                    const api::render::RenderTargetDesc &desc);
     ~VkRenderTarget() override;
 

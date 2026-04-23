@@ -29,6 +29,25 @@ struct ShaderVertexAttribute {
     std::string   name;
 };
 
+// Classification of a reflected uniform name. setUniform() routes on this
+// to decide whether the value goes into a push-constant staging buffer, a
+// PerDraw UBO write, or a material descriptor set.
+enum class ShaderUniformKind : std::uint8_t {
+    Unknown,           // unrecognized name; setUniform no-ops
+    PushConstant,      // value writes into push-constant staging at `offset`, flushed in drawIndexed
+    MaterialSampler,   // sampler binding in set=1 — no bytes to write; binding determined by texture->bind slot
+    PerDrawUbo,        // value writes into PerDraw UBO (Phase 3+)
+};
+
+struct ShaderUniformEntry {
+    ShaderUniformKind   kind       = ShaderUniformKind::Unknown;
+    std::uint32_t       offset     = 0;   // bytes — PushConstant / PerDrawUbo
+    std::uint32_t       size       = 0;   // bytes — PushConstant / PerDrawUbo
+    VkShaderStageFlags  stageFlags = 0;   // PushConstant only
+    std::uint32_t       set        = 0;   // MaterialSampler only
+    std::uint32_t       binding    = 0;   // MaterialSampler only
+};
+
 // Result of reflecting vertex+fragment SPIR-V, passed to VkShader's ctor.
 struct ShaderReflection {
     // Per-set bindings, already merged across vertex+fragment stages.
@@ -43,8 +62,13 @@ struct ShaderReflection {
     // Vertex input attributes sorted by location.
     std::vector<ShaderVertexAttribute> vertexAttributes;
 
-    // Uniform name → descriptor map (empty until Phase 3c/3d wire it up).
+    // Uniform name → UniformDescriptor{type, location}. The `location` field
+    // is the index into `entries` below.
     core::UniformDescriptorMap uniforms;
+
+    // Parallel table: entries[uniformDescriptor.location] carries the Vulkan-
+    // specific routing info (push-constant offset, sampler binding, etc.).
+    std::vector<ShaderUniformEntry> entries;
 };
 
 struct BindState;
@@ -78,6 +102,15 @@ public:
     [[nodiscard]] const ShaderReflection              &reflection()    const { return m_reflection; }
     [[nodiscard]] VkPipelineLayout                     pipelineLayout() const { return m_pipelineLayout; }
     [[nodiscard]] const std::vector<VkDescriptorSetLayout> &setLayouts() const { return m_setLayouts; }
+
+    // Lookup the routing info for a UniformDescriptor.location value.
+    // Returns nullptr for invalid/out-of-range locations.
+    [[nodiscard]] const ShaderUniformEntry *uniformEntry(int location) const {
+        if (location < 0) return nullptr;
+        const auto ix = static_cast<std::size_t>(location);
+        if (ix >= m_reflection.entries.size()) return nullptr;
+        return &m_reflection.entries[ix];
+    }
 
 private:
     Device                           &m_device;

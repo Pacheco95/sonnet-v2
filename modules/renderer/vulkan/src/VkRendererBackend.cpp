@@ -7,6 +7,9 @@
 #include <sonnet/renderer/vulkan/VkTextureFactory.h>
 #include <sonnet/renderer/vulkan/VkVertexInputState.h>
 
+#include <algorithm>
+#include <cstring>
+
 #include <sonnet/window/GLFWWindow.h>
 
 #include "VkBindState.h"
@@ -91,8 +94,8 @@ void VkRendererBackend::initialize() {
     // 7. Factories + pipeline cache + descriptor manager.
     m_shaderCompiler      = std::make_unique<VkShaderCompiler>(*m_device, *m_bindState);
     m_samplerCache        = std::make_unique<SamplerCache>(*m_device);
-    m_textureFactory      = std::make_unique<VkTextureFactory>(*m_device, *m_samplerCache);
-    m_renderTargetFactory = std::make_unique<VkRenderTargetFactory>(*m_device, *m_samplerCache);
+    m_textureFactory      = std::make_unique<VkTextureFactory>(*m_device, *m_samplerCache, *m_bindState);
+    m_renderTargetFactory = std::make_unique<VkRenderTargetFactory>(*m_device, *m_samplerCache, *m_bindState);
     m_gpuMeshFactory      = std::make_unique<VkGpuMeshFactory>(*this);
     m_pipelineCache       = std::make_unique<PipelineCache>(*m_device);
     m_descriptorManager   = std::make_unique<DescriptorManager>(*m_device, *m_bindState);
@@ -278,8 +281,42 @@ std::unique_ptr<api::render::IVertexInputState> VkRendererBackend::createVertexI
 
 // ── Uniforms & drawing (Phase 3) ───────────────────────────────────────────────
 
-void VkRendererBackend::setUniform(UniformLocation, const core::UniformValue &) {
-    SN_VK_TODO("setUniform — Phase 3");
+void VkRendererBackend::setUniform(UniformLocation location, const core::UniformValue &value) {
+    const auto *shader = m_bindState->currentShader;
+    if (!shader) return;
+    const auto *entry = shader->uniformEntry(static_cast<int>(location));
+    if (!entry) return;
+
+    switch (entry->kind) {
+        case ShaderUniformKind::PushConstant: {
+            if (entry->offset + entry->size > BindState::kPushConstantBytes) return;
+            auto *dst = m_bindState->pushConstantStaging.data() + entry->offset;
+            std::visit([&](auto &&v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, core::Sampler>) {
+                    // Samplers don't live in push constants — ignore.
+                } else {
+                    const std::size_t n = std::min<std::size_t>(entry->size, sizeof(T));
+                    std::memcpy(dst, &v, n);
+                }
+            }, value);
+            const auto end = entry->offset + entry->size;
+            if (end > m_bindState->pushConstantDirtyEnd) {
+                m_bindState->pushConstantDirtyEnd = end;
+            }
+            return;
+        }
+        case ShaderUniformKind::MaterialSampler:
+            // Binding is determined by the slot passed to texture->bind in
+            // Renderer::bindMaterial; the Sampler value itself is irrelevant
+            // under Vulkan.
+            return;
+        case ShaderUniformKind::PerDrawUbo:
+            // Phase 3+ — implement ring-buffer write here.
+            return;
+        case ShaderUniformKind::Unknown:
+            return;
+    }
 }
 
 void VkRendererBackend::drawIndexed(std::size_t indexCount) {
@@ -303,11 +340,29 @@ void VkRendererBackend::drawIndexed(std::size_t indexCount) {
         m_activeColorCount, m_activeHasDepth);
     vkCmdBindPipeline(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-    // Bind set 0 (frame-wide UBOs: Camera + Lights) if the shader declares one.
-    VkDescriptorSet frameSet = m_descriptorManager->allocateFrameSet0(*shader);
-    if (frameSet != VK_NULL_HANDLE) {
+    // Bind set 0 (frame-wide UBOs: Camera + Lights) if the shader declares it.
+    if (VkDescriptorSet frameSet = m_descriptorManager->allocateFrameSet0(*shader);
+        frameSet != VK_NULL_HANDLE) {
         vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 shader->pipelineLayout(), 0, 1, &frameSet, 0, nullptr);
+    }
+
+    // Bind set 1 (material textures) if the shader declares it.
+    if (VkDescriptorSet matSet = m_descriptorManager->allocateMaterialSet1(*shader);
+        matSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(frame.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                shader->pipelineLayout(), 1, 1, &matSet, 0, nullptr);
+    }
+
+    // Flush push constants for any uniform writes that happened since the
+    // last draw. Union of stage flags from reflection.
+    if (m_bindState->pushConstantDirtyEnd > 0 &&
+        !shader->reflection().pushConstantRanges.empty()) {
+        VkShaderStageFlags stages = 0;
+        for (const auto &r : shader->reflection().pushConstantRanges) stages |= r.stageFlags;
+        vkCmdPushConstants(frame.cmd, shader->pipelineLayout(), stages,
+                            0, m_bindState->pushConstantDirtyEnd,
+                            m_bindState->pushConstantStaging.data());
     }
 
     const VkBuffer     vbo       = m_bindState->currentVertex;
@@ -316,6 +371,10 @@ void VkRendererBackend::drawIndexed(std::size_t indexCount) {
     vkCmdBindIndexBuffer(frame.cmd, m_bindState->currentIndex, 0, m_bindState->indexType);
 
     vkCmdDrawIndexed(frame.cmd, static_cast<std::uint32_t>(indexCount), 1, 0, 0, 0);
+
+    // Reset per-draw scoped state (material textures, push-constant hwm) so
+    // the next material bind starts clean.
+    m_bindState->clearDrawScopedState();
 }
 
 // ── Factory accessors ──────────────────────────────────────────────────────────

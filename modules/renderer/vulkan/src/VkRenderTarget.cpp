@@ -26,7 +26,7 @@ api::render::TextureDesc makeAttachmentDesc(const api::render::TextureAttachment
 
 } // namespace
 
-VkRenderTarget::VkRenderTarget(Device &device, SamplerCache &samplers,
+VkRenderTarget::VkRenderTarget(Device &device, SamplerCache &samplers, BindState &bindState,
                                const api::render::RenderTargetDesc &desc)
     : m_device(device), m_width(desc.width), m_height(desc.height) {
     // 1. Color attachments.
@@ -34,7 +34,7 @@ VkRenderTarget::VkRenderTarget(Device &device, SamplerCache &samplers,
     for (const auto &c : desc.colors) {
         const auto td = makeAttachmentDesc(c, desc.width, desc.height,
                                            api::render::ColorAttachment);
-        m_colors.emplace_back(std::make_unique<VkTexture2D>(device, samplers, td, c.samplerDesc));
+        m_colors.emplace_back(std::make_unique<VkTexture2D>(device, samplers, bindState, td, c.samplerDesc));
     }
 
     // 2. Depth attachment (TextureAttachmentDesc only — RenderBufferDesc not used
@@ -43,7 +43,7 @@ VkRenderTarget::VkRenderTarget(Device &device, SamplerCache &samplers,
         if (const auto *td = std::get_if<api::render::TextureAttachmentDesc>(&*desc.depth)) {
             const auto dd = makeAttachmentDesc(*td, desc.width, desc.height,
                                                api::render::DepthAttachment);
-            m_depth = std::make_unique<VkTexture2D>(device, samplers, dd, td->samplerDesc);
+            m_depth = std::make_unique<VkTexture2D>(device, samplers, bindState, dd, td->samplerDesc);
         } else {
             throw VulkanError("VkRenderTarget: RenderBufferDesc depth not implemented "
                               "(use TextureAttachmentDesc for the depth attachment).");

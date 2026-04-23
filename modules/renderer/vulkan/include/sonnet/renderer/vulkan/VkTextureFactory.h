@@ -9,10 +9,11 @@ namespace sonnet::renderer::vulkan {
 
 class Device;
 class SamplerCache;
+struct BindState;
 
 class VkTextureFactory final : public api::render::ITextureFactory {
 public:
-    VkTextureFactory(Device &device, SamplerCache &samplers);
+    VkTextureFactory(Device &device, SamplerCache &samplers, BindState &bindState);
 
     [[nodiscard]] std::unique_ptr<api::render::ITexture> create(
         const api::render::TextureDesc &desc,
@@ -31,6 +32,7 @@ public:
 private:
     Device       &m_device;
     SamplerCache &m_samplers;
+    BindState    &m_bindState;
 };
 
 } // namespace sonnet::renderer::vulkan
