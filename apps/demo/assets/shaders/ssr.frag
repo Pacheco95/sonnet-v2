@@ -7,9 +7,14 @@ uniform sampler2D uNormalMetallic;  // G-buffer attachment 1: world normal.rgb +
 uniform sampler2D uAlbedoRoughness; // G-buffer attachment 0: albedo.rgb + roughness.a
 uniform sampler2D uHDRColor;        // HDR lit result — the reflection source
 
-uniform mat4  uProjection;
-uniform mat4  uInvProjection;
-uniform mat4  uView;
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
+
 uniform vec2  uResolution;          // framebuffer size in pixels
 
 uniform int   uMaxSteps;            // max ray steps (32–128)

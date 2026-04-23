@@ -29,10 +29,14 @@ uniform sampler2D       uBRDFLUT;
 uniform float           uMaxPrefilteredLOD;
 uniform sampler2D       uSSAO;      // blurred screen-space AO
 
-// ── Matrices and camera ───────────────────────────────────────────────────────
-uniform mat4  uInvViewProj;  // inverse(proj * view) — reconstruct world pos from depth
-uniform mat4  uView;         // camera view — for cascade depth selection
-uniform vec3  uViewPosition;
+// ── Camera UBO (binding = 0) ──────────────────────────────────────────────────
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
 
 // ── Lights ────────────────────────────────────────────────────────────────────
 struct DirLight {
@@ -40,7 +44,6 @@ struct DirLight {
     vec3  color;
     float intensity;
 };
-uniform DirLight uDirLight;
 
 struct PointLight {
     vec3  position;
@@ -51,8 +54,12 @@ struct PointLight {
     float quadratic;
 };
 #define MAX_POINT_LIGHTS 8
-uniform PointLight uPointLights[MAX_POINT_LIGHTS];
-uniform int        uPointLightCount;
+
+layout(std140, binding = 1) uniform LightsUBO {
+    DirLight   uDirLight;
+    PointLight uPointLights[MAX_POINT_LIGHTS];
+    int        uPointLightCount;
+};
 
 const float PI = 3.14159265359;
 

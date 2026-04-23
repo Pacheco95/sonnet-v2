@@ -48,7 +48,12 @@ namespace sonnet::renderer::frontend {
 using namespace api::render;
 using namespace core;
 
-Renderer::Renderer(IRendererBackend &backend) : m_backend(backend) {}
+Renderer::Renderer(IRendererBackend &backend) : m_backend(backend) {
+    CameraUBO zeroCam{};
+    m_cameraUBO = m_backend.createBuffer(BufferType::Uniform, &zeroCam, sizeof(CameraUBO));
+    LightsUBO zeroLights{};
+    m_lightsUBO = m_backend.createBuffer(BufferType::Uniform, &zeroLights, sizeof(LightsUBO));
+}
 
 // ── Asset creation ─────────────────────────────────────────────────────────────
 
@@ -168,6 +173,14 @@ void Renderer::endFrame() {
 }
 
 void Renderer::render(const FrameContext &ctx, std::vector<RenderItem> &queue) {
+    const CameraUBO camData = buildCameraUBO(ctx);
+    m_cameraUBO->update(&camData, sizeof(CameraUBO));
+    m_cameraUBO->bindBase(0);
+
+    const LightsUBO lightData = buildLightsUBO(ctx);
+    m_lightsUBO->update(&lightData, sizeof(LightsUBO));
+    m_lightsUBO->bindBase(1);
+
     for (const auto &item : queue) {
         auto meshIt = m_meshes.find(item.mesh);
         if (meshIt == m_meshes.end()) continue;
@@ -241,43 +254,18 @@ void Renderer::bindMaterial(const MaterialInstance &mat,
     const IShader &shader = *shaderIt->second;
     const auto &uniforms  = shader.getUniforms();
 
-    // Upload built-in uniforms if the shader declares them.
+    // Upload per-draw built-in uniforms. Camera and light data are in UBOs
+    // bound once per frame at the top of render() — not uploaded here.
     auto upload = [&](const std::string &name, const core::UniformValue &val) {
         if (auto it = uniforms.find(name); it != uniforms.end()) {
             m_backend.setUniform(it->second.location, val);
         }
     };
-    upload("uModel",        modelMatrix);
-    upload("uView",         ctx.viewMatrix);
-    upload("uProjection",   ctx.projectionMatrix);
-    upload("uViewPosition", ctx.viewPosition);
+    upload("uModel", modelMatrix);
 
-    // Upload light-space matrix if present.
+    // Upload light-space matrix if present (forward shadow path, per-draw).
     if (ctx.lightSpaceMatrix) {
         upload("uLightSpaceMatrix", *ctx.lightSpaceMatrix);
-    }
-
-    // Upload directional light if present.
-    if (ctx.directionalLight) {
-        const auto &dl = *ctx.directionalLight;
-        upload("uDirLight.direction", dl.direction);
-        upload("uDirLight.color",     dl.color);
-        upload("uDirLight.intensity", dl.intensity);
-    }
-
-    // Upload point lights if present.
-    if (!ctx.pointLights.empty()) {
-        upload("uPointLightCount", static_cast<int>(ctx.pointLights.size()));
-        for (std::size_t i = 0; i < ctx.pointLights.size(); ++i) {
-            const auto &pl     = ctx.pointLights[i];
-            const std::string  p = "uPointLights[" + std::to_string(i) + "].";
-            upload(p + "position",  pl.position);
-            upload(p + "color",     pl.color);
-            upload(p + "intensity", pl.intensity);
-            upload(p + "constant",  pl.constant);
-            upload(p + "linear",    pl.linear);
-            upload(p + "quadratic", pl.quadratic);
-        }
     }
 
     // Upload material uniform values: template defaults first, then per-instance

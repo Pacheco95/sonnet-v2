@@ -6,9 +6,15 @@ layout(location = 3) in vec3 aNormal;
 layout(location = 4) in vec3 aTangent;
 layout(location = 5) in vec3 aBiTangent;
 
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
+
 uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
 
 out vec3 vFragPos;  // world-space position
 out vec2 vTexCoord;

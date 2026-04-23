@@ -1,9 +1,13 @@
 #version 460 core
 layout(location = 0) in vec3 aPosition;
 
-// Auto-uploaded by the engine renderer.
-uniform mat4 uView;
-uniform mat4 uProjection;
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
 
 out vec3 vDir;
 

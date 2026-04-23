@@ -308,7 +308,6 @@ int main() {
         PostProcessParams ppParams{
             .viewMat          = viewMat,
             .projMat          = projMat,
-            .invProjMat       = glm::inverse(projMat),
             .fbSize           = {static_cast<int>(fbSize.x),
                                  static_cast<int>(fbSize.y)},
             .shadowLightCount = shadowLightCount,

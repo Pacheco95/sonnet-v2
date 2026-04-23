@@ -2,9 +2,15 @@
 layout(location = 0) in vec3 aPosition;
 layout(location = 3) in vec3 aNormal;
 
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
+
 uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
 
 out vec3 vViewNormal;
 

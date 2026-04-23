@@ -27,7 +27,9 @@ public:
         glGenBuffers(1, &m_handle);
         if (!m_handle) throw std::runtime_error("glGenBuffers failed");
         bind();
-        glBufferData(m_glTarget, static_cast<GLsizeiptr>(size), data, GL_STATIC_DRAW);
+        const GLenum usage = (type == api::render::BufferType::Uniform)
+                             ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW;
+        glBufferData(m_glTarget, static_cast<GLsizeiptr>(size), data, usage);
     }
 
     ~GlGpuBuffer() override {
@@ -40,6 +42,17 @@ public:
     void bind() const override {
         assert(m_handle);
         glBindBuffer(m_glTarget, m_handle);
+    }
+
+    void update(const void *data, std::size_t size) override {
+        assert(m_handle);
+        bind();
+        glBufferSubData(m_glTarget, 0, static_cast<GLsizeiptr>(size), data);
+    }
+
+    void bindBase(std::uint32_t bindingPoint) const override {
+        assert(m_handle);
+        glBindBufferBase(m_glTarget, bindingPoint, m_handle);
     }
 
     [[nodiscard]] GLuint handle() const { return m_handle; }

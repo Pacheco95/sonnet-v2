@@ -7,12 +7,21 @@ out vec4 fragColor;
 
 const float PI = 3.14159265359;
 
+// ── Camera UBO (binding = 0) ──────────────────────────────────────────────────
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
+
+// ── Lights UBO (binding = 1) ──────────────────────────────────────────────────
 struct DirLight {
     vec3  direction;
     vec3  color;
     float intensity;
 };
-uniform DirLight        uDirLight;
 
 struct PointLight {
     vec3  position;
@@ -23,9 +32,12 @@ struct PointLight {
     float quadratic;
 };
 #define MAX_POINT_LIGHTS 8
-uniform PointLight uPointLights[MAX_POINT_LIGHTS];
-uniform int        uPointLightCount;
-uniform vec3            uViewPosition;
+
+layout(std140, binding = 1) uniform LightsUBO {
+    DirLight   uDirLight;
+    PointLight uPointLights[MAX_POINT_LIGHTS];
+    int        uPointLightCount;
+};
 uniform sampler2D       uAlbedo;
 // Normal map in tangent space (OpenGL convention: +Y = up).
 // Bind a 1x1 {128,128,255} flat-normal texture when no map is available.

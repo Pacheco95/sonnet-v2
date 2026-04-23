@@ -7,10 +7,15 @@ uniform sampler2D uDepthMap;  // depth texture from pre-pass
 uniform sampler2D uNoiseMap;  // 4x4 random rotation texture (tiled)
 
 uniform vec3  uKernel[64];    // hemisphere sample offsets in tangent space
-uniform mat4  uProjection;    // camera projection (for screen-space projection)
-uniform mat4  uInvProjection; // inverse projection (for position reconstruction)
-uniform mat4  uView;          // view matrix — transforms world-space G-buffer normals to view space
 uniform vec2  uNoiseScale;    // vec2(viewportW/4, viewportH/4) for noise tiling
+
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
 uniform float uRadius;        // SSAO sampling radius in view space
 uniform float uBias;          // depth bias to avoid self-occlusion
 

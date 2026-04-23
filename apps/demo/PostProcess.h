@@ -22,7 +22,6 @@ struct PostProcessParams {
     // Camera / viewport
     glm::mat4  viewMat{};
     glm::mat4  projMat{};
-    glm::mat4  invProjMat{};
     glm::ivec2 fbSize{};
 
     // Shadow results (from ShadowMaps::render())

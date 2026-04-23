@@ -1,11 +1,13 @@
 #pragma once
 
+#include <sonnet/api/render/IGpuBuffer.h>
 #include <sonnet/api/render/IRenderer.h>
 #include <sonnet/api/render/IRendererBackend.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/api/render/RenderItem.h>
 #include <sonnet/core/Macros.h>
 #include <sonnet/core/Types.h>
+#include <sonnet/renderer/frontend/UboLayouts.h>
 
 #include <memory>
 #include <unordered_map>
@@ -76,6 +78,9 @@ private:
 
     api::render::IRendererBackend   &m_backend;
     api::render::RenderOverrides    *m_overrides = nullptr;
+
+    std::unique_ptr<api::render::IGpuBuffer> m_cameraUBO;
+    std::unique_ptr<api::render::IGpuBuffer> m_lightsUBO;
 
     // Asset stores keyed by typed handles.
     std::unordered_map<core::GPUMeshHandle,          std::unique_ptr<api::render::GpuMesh>>         m_meshes;

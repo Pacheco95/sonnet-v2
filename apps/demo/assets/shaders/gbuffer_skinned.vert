@@ -12,8 +12,13 @@ layout(location = 7) in vec4  aBoneWeights;
 const int MAX_BONES = 128;
 uniform mat4 uBoneMatrices[MAX_BONES];
 
-uniform mat4 uView;
-uniform mat4 uProjection;
+layout(std140, binding = 0) uniform CameraUBO {
+    mat4 uView;
+    mat4 uProjection;
+    vec3 uViewPosition;
+    mat4 uInvViewProj;
+    mat4 uInvProjection;
+};
 
 out vec3 vFragPos;   // world-space position
 out vec2 vTexCoord;

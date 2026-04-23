@@ -327,8 +327,8 @@ void PostProcess::buildGraph()
             m_rts.ssaoRT,
             RGClearDesc{.colors = {{0,{1,1,1,1}}}},
             false,
-            [this](const FrameContext &, const FrameContext &ppCtx) {
-                fullscreenQuad(*m_ssaoMat, ppCtx);
+            [this](const FrameContext &ctx, const FrameContext &) {
+                fullscreenQuad(*m_ssaoMat, ctx);
             });
 
         m_graph.addPass("SSAOBlur",
@@ -436,8 +436,8 @@ void PostProcess::buildGraph()
             m_rts.ssrRT,
             RGClearDesc{.colors = {{0,{0,0,0,1}}}},
             false,
-            [this](const FrameContext &, const FrameContext &ppCtx) {
-                fullscreenQuad(*m_ssrMat, ppCtx);
+            [this](const FrameContext &ctx, const FrameContext &) {
+                fullscreenQuad(*m_ssrMat, ctx);
             });
     } else {
         m_graph.addPass("SSRDisabled",
@@ -557,19 +557,16 @@ void PostProcess::execute(const PostProcessParams &p, const FrameContext &ctx)
     }
 
     // ── Per-frame uniform uploads ─────────────────────────────────────────────
+    // Camera matrices (uView, uProjection, uInvProjection, uInvViewProj) are
+    // now in CameraUBO (binding=0) — populated automatically by Renderer::render().
     if (p.ssaoEnabled) {
-        m_ssaoMat->set("uView",          p.viewMat);
-        m_ssaoMat->set("uProjection",    p.projMat);
-        m_ssaoMat->set("uInvProjection", p.invProjMat);
-        m_ssaoMat->set("uNoiseScale",    glm::vec2{
+        m_ssaoMat->set("uNoiseScale", glm::vec2{
             static_cast<float>(p.fbSize.x) / 4.0f,
             static_cast<float>(p.fbSize.y) / 4.0f});
         m_ssaoMat->set("uRadius", p.ssaoRadius);
         m_ssaoMat->set("uBias",   p.ssaoBias);
     }
     {
-        const glm::mat4 invViewProj = glm::inverse(p.projMat * p.viewMat);
-        m_deferredMat->set("uInvViewProj",       invViewProj);
         m_deferredMat->set("uShadowBias",        p.shadowBias);
         m_deferredMat->set("uPointShadowCount",  p.shadowLightCount);
         m_deferredMat->set("uPointShadowBias",   p.pointShadowBias);
@@ -581,11 +578,8 @@ void PostProcess::execute(const PostProcessParams &p, const FrameContext &ctx)
         }
     }
     if (p.ssrEnabled) {
-        m_ssrMat->set("uProjection",    p.projMat);
-        m_ssrMat->set("uInvProjection", p.invProjMat);
-        m_ssrMat->set("uView",          p.viewMat);
-        m_ssrMat->set("uResolution",    glm::vec2(static_cast<float>(p.fbSize.x),
-                                                   static_cast<float>(p.fbSize.y)));
+        m_ssrMat->set("uResolution", glm::vec2(static_cast<float>(p.fbSize.x),
+                                               static_cast<float>(p.fbSize.y)));
         m_ssrMat->set("uMaxSteps",     p.ssrMaxSteps);
         m_ssrMat->set("uStepSize",     p.ssrStepSize);
         m_ssrMat->set("uThickness",    p.ssrThickness);
