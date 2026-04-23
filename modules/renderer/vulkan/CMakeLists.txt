@@ -48,6 +48,7 @@ target_link_libraries(sonnet_renderer_vulkan
 # fall back to linking by library file where the component import isn't exposed.
 if(TARGET Vulkan::glslang)
     target_link_libraries(sonnet_renderer_vulkan PRIVATE Vulkan::glslang)
+    target_include_directories(sonnet_renderer_vulkan PRIVATE ${Vulkan_INCLUDE_DIR})
 endif()
 if(TARGET Vulkan::SPIRV)
     target_link_libraries(sonnet_renderer_vulkan PRIVATE Vulkan::SPIRV)
