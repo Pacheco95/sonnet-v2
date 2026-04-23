@@ -2,8 +2,16 @@
 in  vec2 vUV;
 out vec4 fragColor;
 
-uniform sampler2D uMask;
-uniform vec3      uOutlineColor;
+layout(SET(1,0)) uniform sampler2D uMask;
+
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    vec3 uOutlineColor;
+} pc;
+#define uOutlineColor pc.uOutlineColor
+#else
+uniform vec3 uOutlineColor;
+#endif
 
 void main() {
     vec2 texel = 1.0 / vec2(textureSize(uMask, 0));

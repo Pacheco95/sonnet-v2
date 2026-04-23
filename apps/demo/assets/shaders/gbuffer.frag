@@ -7,15 +7,35 @@ layout(location = 0) out vec4 gAlbedoRoughness; // albedo.rgb + roughness
 layout(location = 1) out vec4 gNormalMetallic;  // world-space normal.rgb + metallic
 layout(location = 2) out vec4 gEmissiveAO;      // emissive.rgb + ORM ao
 
-uniform sampler2D uAlbedo;
-uniform sampler2D uNormalMap;
-uniform sampler2D uORM;
-uniform sampler2D uEmissive;
-uniform vec3      uEmissiveFactor;
-uniform float     uMetallic;
-uniform float     uRoughness;
-uniform vec4      uAlbedoFactor;  // per-material tint/scale (default {1,1,1,1})
-uniform float     uAlphaCutoff;  // 0.0 = disabled; > 0.0 = alpha-mask cutoff
+layout(SET(1,0)) uniform sampler2D uAlbedo;
+layout(SET(1,1)) uniform sampler2D uNormalMap;
+layout(SET(1,2)) uniform sampler2D uORM;
+layout(SET(1,3)) uniform sampler2D uEmissive;
+
+// Mirrors gbuffer.vert's push layout identically — SPIRV-Reflect unions the
+// stage flags for the single range, and the engine's Renderer can address
+// each member by name through a single uniform map.
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    mat4  uModel;
+    vec3  uEmissiveFactor;
+    float uMetallic;
+    float uRoughness;
+    vec4  uAlbedoFactor;
+    float uAlphaCutoff;
+} pc;
+#define uEmissiveFactor pc.uEmissiveFactor
+#define uMetallic       pc.uMetallic
+#define uRoughness      pc.uRoughness
+#define uAlbedoFactor   pc.uAlbedoFactor
+#define uAlphaCutoff    pc.uAlphaCutoff
+#else
+uniform vec3  uEmissiveFactor;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform vec4  uAlbedoFactor;  // per-material tint/scale (default {1,1,1,1})
+uniform float uAlphaCutoff;   // 0.0 = disabled; > 0.0 = alpha-mask cutoff
+#endif
 
 void main() {
     vec4 albedoSample = texture(uAlbedo, vTexCoord);

@@ -6,7 +6,7 @@ layout(location = 3) in vec3 aNormal;
 layout(location = 4) in vec3 aTangent;
 layout(location = 5) in vec3 aBiTangent;
 
-layout(std140, binding = 0) uniform CameraUBO {
+layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPosition;
@@ -14,7 +14,21 @@ layout(std140, binding = 0) uniform CameraUBO {
     mat4 uInvProjection;
 };
 
+// Shared push-constant block with gbuffer.frag. Fits all per-draw material
+// scalars + uModel in 116 bytes, under the 128-byte spec minimum.
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    mat4  uModel;           // 0
+    vec3  uEmissiveFactor;  // 64  (vec3 padded to vec4 slot in std140 push-layout)
+    float uMetallic;        // 80
+    float uRoughness;       // 84
+    vec4  uAlbedoFactor;    // 96  (aligned to 16)
+    float uAlphaCutoff;     // 112
+} pc;
+#define uModel pc.uModel
+#else
 uniform mat4 uModel;
+#endif
 
 out vec3 vFragPos;  // world-space position
 out vec2 vTexCoord;
