@@ -19,12 +19,12 @@ namespace sonnet::renderer::vulkan {
 namespace {
 
 // Preamble injected after #version in every shader compiled under Vulkan.
-// Defines VULKAN so shaders can conditionally declare push-constant /
-// set=2 PerDraw UBO blocks, and SET(n,b) so `layout(SET(0,0)) ...`
-// desugars to `layout(set = 0, binding = 0) ...` for Vulkan and to the
-// binding-only form for OpenGL (preamble set in GlShaderCompiler).
+// Shaders use `#ifdef VULKAN` — glslang defines that automatically when the
+// client is GLSLANG_CLIENT_VULKAN (redefining it here would error out with
+// "Macro redefined; different substitutions"), so we only need to provide
+// the SET(n,b) macro that desugars to `layout(set=n, binding=b) ...` under
+// Vulkan and to the binding-only form under OpenGL (preamble in GlShaderCompiler).
 constexpr const char *kVulkanPreamble =
-    "#define VULKAN 1\n"
     "#define SET(n,b) set = n, binding = b\n";
 
 std::vector<std::uint32_t> compileStage(glslang_stage_t stage,

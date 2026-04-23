@@ -2,35 +2,31 @@
 in  vec2 vUV;
 out vec4 fragColor;
 
-// ── G-buffer inputs ───────────────────────────────────────────────────────────
-uniform sampler2D gAlbedoRoughness; // .rgb = albedo, .a = roughness
-uniform sampler2D gNormalMetallic;  // .rgb = world-space normal, .a = metallic
-uniform sampler2D gEmissiveAO;      // .rgb = emissive, .a = ORM ambient-occlusion
-uniform sampler2D gDepth;           // hardware depth [0,1]
+// ── G-buffer inputs + shadow maps + IBL — all in set=1 ────────────────────────
+// Array bindings (uShadowMaps[3], uPointShadowMaps[4]) will compile under both
+// backends; the Vulkan backend's set=1 descriptor allocator needs multi-binding
+// support (Phase 7b) before this pass actually runs under Vulkan.
+layout(SET(1,0))  uniform sampler2D       gAlbedoRoughness; // .rgb = albedo, .a = roughness
+layout(SET(1,1))  uniform sampler2D       gNormalMetallic;  // .rgb = world-space normal, .a = metallic
+layout(SET(1,2))  uniform sampler2D       gEmissiveAO;      // .rgb = emissive, .a = ORM ambient-occlusion
+layout(SET(1,3))  uniform sampler2D       gDepth;           // hardware depth [0,1]
 
-// ── Lighting ──────────────────────────────────────────────────────────────────
 // ── Cascaded shadow maps (directional light) ──────────────────────────────────
 #define NUM_CASCADES 3
-uniform sampler2DShadow uShadowMaps[NUM_CASCADES];
-uniform mat4            uCSMLightSpaceMats[NUM_CASCADES];
-uniform float           uCSMSplitDepths[NUM_CASCADES]; // view-space far depths (positive)
-uniform float           uShadowBias;
+layout(SET(1,4))  uniform sampler2DShadow uShadowMaps[NUM_CASCADES];
 
 // ── Point-light shadow cubemaps ───────────────────────────────────────────────
 #define MAX_SHADOW_LIGHTS 4
-uniform samplerCube uPointShadowMaps[MAX_SHADOW_LIGHTS];
-uniform float       uPointShadowFarPlane;
-uniform float       uPointShadowBias;
-uniform int         uPointShadowCount;
+layout(SET(1,7))  uniform samplerCube     uPointShadowMaps[MAX_SHADOW_LIGHTS];
 
-uniform samplerCube     uIrradianceMap;
-uniform samplerCube     uPrefilteredMap;
-uniform sampler2D       uBRDFLUT;
-uniform float           uMaxPrefilteredLOD;
-uniform sampler2D       uSSAO;      // blurred screen-space AO
+// ── IBL ───────────────────────────────────────────────────────────────────────
+layout(SET(1,11)) uniform samplerCube     uIrradianceMap;
+layout(SET(1,12)) uniform samplerCube     uPrefilteredMap;
+layout(SET(1,13)) uniform sampler2D       uBRDFLUT;
+layout(SET(1,14)) uniform sampler2D       uSSAO;      // blurred screen-space AO
 
-// ── Camera UBO (binding = 0) ──────────────────────────────────────────────────
-layout(std140, binding = 0) uniform CameraUBO {
+// ── Camera UBO (set=0, binding=0) ─────────────────────────────────────────────
+layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPosition;
@@ -38,7 +34,7 @@ layout(std140, binding = 0) uniform CameraUBO {
     mat4 uInvProjection;
 };
 
-// ── Lights ────────────────────────────────────────────────────────────────────
+// ── Lights UBO (set=0, binding=1) — frame-wide per plan §7 ────────────────────
 struct DirLight {
     vec3  direction;
     vec3  color;
@@ -55,11 +51,46 @@ struct PointLight {
 };
 #define MAX_POINT_LIGHTS 8
 
-layout(std140, binding = 1) uniform LightsUBO {
+layout(std140, SET(0,1)) uniform LightsUBO {
     DirLight   uDirLight;
     PointLight uPointLights[MAX_POINT_LIGHTS];
     int        uPointLightCount;
 };
+
+// ── Per-draw UBO for cascade matrices + split depths (too big for push) ───────
+#ifdef VULKAN
+layout(std140, SET(2,0)) uniform PerDraw {
+    mat4  uCSMLightSpaceMats[NUM_CASCADES];
+    float uCSMSplitDepths[NUM_CASCADES]; // view-space far depths (positive)
+} pd;
+#define uCSMLightSpaceMats pd.uCSMLightSpaceMats
+#define uCSMSplitDepths    pd.uCSMSplitDepths
+#else
+uniform mat4  uCSMLightSpaceMats[NUM_CASCADES];
+uniform float uCSMSplitDepths[NUM_CASCADES];
+#endif
+
+// ── Small per-frame scalars in push constants ─────────────────────────────────
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    float uShadowBias;
+    float uPointShadowFarPlane;
+    float uPointShadowBias;
+    int   uPointShadowCount;
+    float uMaxPrefilteredLOD;
+} pc;
+#define uShadowBias          pc.uShadowBias
+#define uPointShadowFarPlane pc.uPointShadowFarPlane
+#define uPointShadowBias     pc.uPointShadowBias
+#define uPointShadowCount    pc.uPointShadowCount
+#define uMaxPrefilteredLOD   pc.uMaxPrefilteredLOD
+#else
+uniform float uShadowBias;
+uniform float uPointShadowFarPlane;
+uniform float uPointShadowBias;
+uniform int   uPointShadowCount;
+uniform float uMaxPrefilteredLOD;
+#endif
 
 const float PI = 3.14159265359;
 
