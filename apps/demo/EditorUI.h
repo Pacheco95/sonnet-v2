@@ -31,7 +31,8 @@ struct EditorParams {
     glm::mat4  projMat{};
     glm::vec3  camPos{};
     glm::ivec2 fbSize{};
-    GLuint     viewportTexId = 0;
+    // Opaque texture id for ImGui::Image (cast to ImTextureID at call site).
+    ImTextureID viewportTexId{};
 
     // Frame context (needed for picking GPU render pass)
     const sonnet::api::render::FrameContext *ctx = nullptr;

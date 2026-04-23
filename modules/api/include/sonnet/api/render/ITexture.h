@@ -76,6 +76,12 @@ public:
     [[nodiscard]] virtual const TextureDesc  &textureDesc() const = 0;
     [[nodiscard]] virtual const SamplerDesc  &samplerDesc() const = 0;
     [[nodiscard]] virtual unsigned            getNativeHandle() const = 0;
+
+    // ImGui-facing texture identifier. Callers cast to ImTextureID.
+    // GL backend returns the GLuint widened to uintptr_t. Vulkan backend
+    // returns a VkDescriptorSet (lazily allocated via ImGui_ImplVulkan_AddTexture
+    // and cached). Non-const because the Vulkan lazy-cache mutates state.
+    [[nodiscard]] virtual std::uintptr_t      getImGuiTextureId() = 0;
 };
 
 } // namespace sonnet::api::render

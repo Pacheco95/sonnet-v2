@@ -58,6 +58,7 @@ public:
     [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return m_texDesc; }
     [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return m_sampDesc; }
     [[nodiscard]] unsigned getNativeHandle()                            const override { return m_id; }
+    [[nodiscard]] std::uintptr_t getImGuiTextureId()                          override { return static_cast<std::uintptr_t>(m_id); }
 
 private:
     GLuint                               m_id;
@@ -85,6 +86,7 @@ public:
     [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return m_texDesc; }
     [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return m_sampDesc; }
     [[nodiscard]] unsigned getNativeHandle()                            const override { return m_id; }
+    [[nodiscard]] std::uintptr_t getImGuiTextureId()                          override { return static_cast<std::uintptr_t>(m_id); }
 
 private:
     GLuint                               m_id;

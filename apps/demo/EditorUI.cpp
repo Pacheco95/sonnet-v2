@@ -212,9 +212,7 @@ void EditorUI::drawViewportPanel(EditorParams &p) {
 
     m_viewportFocused = ImGui::IsWindowFocused() || ImGui::IsWindowHovered();
     const ImVec2 sz = ImGui::GetContentRegionAvail();
-    ImGui::Image(
-        static_cast<ImTextureID>(static_cast<uintptr_t>(p.viewportTexId)),
-        sz, ImVec2(0, 1), ImVec2(1, 0));
+    ImGui::Image(p.viewportTexId, sz, ImVec2(0, 1), ImVec2(1, 0));
 
     const ImVec2 vpMin  = ImGui::GetItemRectMin();
     const ImVec2 vpMax  = ImGui::GetItemRectMax();

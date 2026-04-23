@@ -9,11 +9,17 @@ GLFWWindow::GLFWWindow(const WindowConfig &cfg) : m_title(cfg.title) {
         throw std::runtime_error("glfwInit failed");
     }
 
+#if defined(SONNET_USE_VULKAN)
+    // Vulkan: no GL context. The renderer creates the surface via
+    // glfwCreateWindowSurface on an instance it owns.
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+#else
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 #ifdef __APPLE__
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#endif
 #endif
 
     m_window = glfwCreateWindow(cfg.width, cfg.height, cfg.title.c_str(), nullptr, nullptr);
@@ -22,17 +28,21 @@ GLFWWindow::GLFWWindow(const WindowConfig &cfg) : m_title(cfg.title) {
         throw std::runtime_error("glfwCreateWindow failed");
     }
 
+#if !defined(SONNET_USE_VULKAN)
     glfwMakeContextCurrent(m_window);
     glfwSwapInterval(1); // vsync
+#endif
 
     setupCallbacks();
     syncSize();
 }
 
 GLFWWindow::~GLFWWindow() {
+#if !defined(SONNET_USE_VULKAN)
     if (glfwGetCurrentContext() == m_window) {
         glfwMakeContextCurrent(nullptr);
     }
+#endif
     glfwDestroyWindow(m_window);
     glfwTerminate();
 }
@@ -59,7 +69,29 @@ void GLFWWindow::requestClose()  { m_shouldClose = true; }
 bool GLFWWindow::shouldClose()   const { return m_shouldClose || glfwWindowShouldClose(m_window); }
 
 void GLFWWindow::pollEvents()    { glfwPollEvents(); }
-void GLFWWindow::swapBuffers()   { glfwSwapBuffers(m_window); }
+void GLFWWindow::swapBuffers()   {
+#if defined(SONNET_USE_VULKAN)
+    // Vulkan presents inside VkRendererBackend::endFrame(); this is a no-op.
+#else
+    glfwSwapBuffers(m_window);
+#endif
+}
+
+#if defined(SONNET_USE_VULKAN)
+VkSurfaceKHR GLFWWindow::createVulkanSurface(VkInstance instance) const {
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    if (glfwCreateWindowSurface(instance, m_window, nullptr, &surface) != VK_SUCCESS) {
+        throw std::runtime_error("glfwCreateWindowSurface failed");
+    }
+    return surface;
+}
+
+std::vector<const char *> GLFWWindow::requiredVulkanInstanceExtensions() const {
+    std::uint32_t count = 0;
+    const char **exts = glfwGetRequiredInstanceExtensions(&count);
+    return {exts, exts + count};
+}
+#endif
 
 void GLFWWindow::toggleFullscreen() {
     GLFWmonitor *monitor = glfwGetPrimaryMonitor();

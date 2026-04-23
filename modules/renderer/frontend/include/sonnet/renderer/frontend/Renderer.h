@@ -48,8 +48,12 @@ public:
     // Register an externally-created ITexture (e.g. IBL cubemaps) and return a handle.
     [[nodiscard]] core::GPUTextureHandle         registerRawTexture(std::unique_ptr<api::render::ITexture> tex);
     // Return the backend-native texture id (e.g. GLuint) for a texture handle.
-    // Useful for passing render-target textures to ImGui::Image.
+    // Prefer imGuiTextureId() for ImGui::Image; this is kept for GL-specific callers.
     [[nodiscard]] unsigned                       nativeTextureId(core::GPUTextureHandle handle) const;
+    // Return an ImGui-consumable texture id (cast to ImTextureID by the caller).
+    // Works across backends: GL returns the GLuint widened to uintptr_t; Vulkan
+    // returns a cached VkDescriptorSet reinterpreted as uintptr_t.
+    [[nodiscard]] std::uintptr_t                 imGuiTextureId(core::GPUTextureHandle handle);
 
     // Look up a MaterialTemplate by handle. Returns nullptr if not found.
     // Used by editor UI to display/edit material uniforms generically.

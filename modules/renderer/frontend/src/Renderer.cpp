@@ -34,6 +34,10 @@ public:
     [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return inner()->textureDesc(); }
     [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return inner()->samplerDesc(); }
     [[nodiscard]] unsigned getNativeHandle() const override { return inner() ? inner()->getNativeHandle() : 0u; }
+    [[nodiscard]] std::uintptr_t getImGuiTextureId() override {
+        auto *t = const_cast<sonnet::api::render::ITexture *>(inner());
+        return t ? t->getImGuiTextureId() : 0u;
+    }
 
 private:
     const RTMap                          &m_rts;
@@ -162,6 +166,13 @@ unsigned Renderer::nativeTextureId(GPUTextureHandle handle) const {
     if (it == m_textures.end())
         throw std::invalid_argument("nativeTextureId: unknown GPUTextureHandle");
     return it->second->getNativeHandle();
+}
+
+std::uintptr_t Renderer::imGuiTextureId(GPUTextureHandle handle) {
+    auto it = m_textures.find(handle);
+    if (it == m_textures.end())
+        throw std::invalid_argument("imGuiTextureId: unknown GPUTextureHandle");
+    return it->second->getImGuiTextureId();
 }
 
 void Renderer::beginFrame() {

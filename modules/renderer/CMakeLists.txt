@@ -1,2 +1,7 @@
-add_subdirectory(opengl)
+if(SONNET_USE_OPENGL)
+    add_subdirectory(opengl)
+endif()
+if(SONNET_USE_VULKAN)
+    add_subdirectory(vulkan)
+endif()
 add_subdirectory(frontend)

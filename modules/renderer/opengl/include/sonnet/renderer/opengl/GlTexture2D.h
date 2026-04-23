@@ -27,6 +27,7 @@ public:
     [[nodiscard]] const api::render::TextureDesc &textureDesc() const override { return m_textureDesc; }
     [[nodiscard]] const api::render::SamplerDesc &samplerDesc() const override { return m_samplerDesc; }
     [[nodiscard]] unsigned getNativeHandle()                    const override { return m_texture; }
+    [[nodiscard]] std::uintptr_t getImGuiTextureId()                  override { return static_cast<std::uintptr_t>(m_texture); }
 
 private:
     unsigned                    m_texture    = 0;

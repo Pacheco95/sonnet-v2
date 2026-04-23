@@ -16,6 +16,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
 endif()
 
 include(cmake/options.cmake)
+
+if(SONNET_USE_VULKAN)
+    add_compile_definitions(SONNET_USE_VULKAN=1)
+endif()
+if(SONNET_USE_OPENGL)
+    add_compile_definitions(SONNET_USE_OPENGL=1)
+endif()
+
 include(cmake/dependencies.cmake)
 include(cmake/functions.cmake)
 

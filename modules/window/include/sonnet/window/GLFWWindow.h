@@ -1,11 +1,18 @@
 #pragma once
 
+// GLFW_INCLUDE_VULKAN is set by modules/window/CMakeLists.txt via
+// target_compile_definitions (PUBLIC) when SONNET_USE_VULKAN is enabled, so
+// every translation unit that includes <GLFW/glfw3.h> — directly or through
+// GLFWInputAdapter.h — pulls in <vulkan/vulkan.h> as well.
 #include <sonnet/api/window/IWindow.h>
 #include <sonnet/window/GLFWInputAdapter.h>
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <string>
+#if defined(SONNET_USE_VULKAN)
+#  include <vector>
+#endif
 
 namespace sonnet::window {
 
@@ -39,6 +46,14 @@ public:
     void setInputAdapter(GLFWInputAdapter *adapter) { m_inputAdapter = adapter; }
 
     [[nodiscard]] GLFWwindow *handle() const { return m_window; }
+
+#if defined(SONNET_USE_VULKAN)
+    // Create a VkSurfaceKHR bound to this window. Caller owns the returned
+    // handle and must destroy it via vkDestroySurfaceKHR before the instance.
+    [[nodiscard]] VkSurfaceKHR createVulkanSurface(VkInstance instance) const;
+    // Extensions GLFW reports as required for Vulkan instance creation.
+    [[nodiscard]] std::vector<const char *> requiredVulkanInstanceExtensions() const;
+#endif
 
 private:
     void setupCallbacks();

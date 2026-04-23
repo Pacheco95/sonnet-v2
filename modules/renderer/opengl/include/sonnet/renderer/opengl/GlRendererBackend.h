@@ -60,6 +60,8 @@ public:
     [[nodiscard]] api::render::IRenderTargetFactory &renderTargetFactory() override { return m_renderTargetFactory; }
     [[nodiscard]] api::render::IGpuMeshFactory     &gpuMeshFactory()       override { return m_gpuMeshFactory; }
 
+    [[nodiscard]] const core::RendererTraits &traits() const override { return core::presets::OpenGL; }
+
 private:
     void setupVertexAttributes(const api::render::VertexLayout &layout);
 

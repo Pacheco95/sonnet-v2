@@ -12,6 +12,7 @@
 #include <sonnet/api/render/FrameContext.h>
 #include <sonnet/api/render/Light.h>
 #include <sonnet/input/InputSystem.h>
+#include <sonnet/renderer/frontend/BackendFactory.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/physics/PhysicsSystem.h>
@@ -39,7 +40,11 @@ int main() {
     sonnet::window::GLFWInputAdapter adapter{input};
     window.setInputAdapter(&adapter);
 
-    sonnet::renderer::opengl::GlRendererBackend backend;
+    auto backendPtr = sonnet::renderer::frontend::makeBackend(window);
+    // The demo's legacy pass classes (ShadowMaps, PostProcess, EditorUI) still
+    // take a concrete GlRendererBackend&; Phase 7 will rewrite them to use
+    // IRendererBackend&. Until then we downcast here.
+    auto &backend   = dynamic_cast<sonnet::renderer::opengl::GlRendererBackend &>(*backendPtr);
     backend.initialize();
 
     sonnet::ui::ImGuiLayer imgui;
@@ -182,8 +187,8 @@ int main() {
     std::string shaderReloadMsg;
     float       shaderReloadMsgTimer = 0.0f;
 
-    GLuint viewportTexId = static_cast<GLuint>(
-        renderer.nativeTextureId(rts.viewportTex));
+    ImTextureID viewportTexId = static_cast<ImTextureID>(
+        renderer.imGuiTextureId(rts.viewportTex));
 
     // ── Frame loop ────────────────────────────────────────────────────────────
     while (!window.shouldClose()) {
@@ -213,8 +218,8 @@ int main() {
             lastFbSize = fbSize;
             rts.resize(static_cast<std::uint32_t>(fbSize.x),
                        static_cast<std::uint32_t>(fbSize.y));
-            viewportTexId = static_cast<GLuint>(
-                renderer.nativeTextureId(rts.viewportTex));
+            viewportTexId = static_cast<ImTextureID>(
+                renderer.imGuiTextureId(rts.viewportTex));
         }
 
         // ── Camera (RMB held + viewport focused) ──────────────────────────────

@@ -1,5 +1,11 @@
 include(FetchContent)
 
+# Vulkan is located first because ImGui (below) and the ui/renderer/vulkan
+# modules (via target_link_libraries) reference Vulkan::Vulkan conditionally.
+if(SONNET_USE_VULKAN)
+    find_package(Vulkan REQUIRED)
+endif()
+
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -65,20 +71,29 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 # ImGui has no CMakeLists — build it as a STATIC library from its source files.
+# Backend sources (imgui_impl_opengl3.cpp vs imgui_impl_vulkan.cpp) are selected
+# based on the active renderer backend.
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 add_library(imgui::imgui ALIAS imgui)
 target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui PUBLIC glfw glad)
+target_link_libraries(imgui PUBLIC glfw)
+if(SONNET_USE_OPENGL)
+    target_sources(imgui PRIVATE ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+    target_link_libraries(imgui PUBLIC glad)
+endif()
+if(SONNET_USE_VULKAN)
+    target_sources(imgui PRIVATE ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+    target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
+endif()
 set_target_properties(imgui PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
 target_compile_options(imgui PRIVATE -w)
 
@@ -140,4 +155,27 @@ if(SONNET_BUILD_TESTS)
         GIT_TAG v3.8.1
     )
     FetchContent_MakeAvailable(Catch2)
+endif()
+
+# Vulkan backend dependencies. find_package(Vulkan) is invoked earlier in the
+# file so ImGui can conditionally link Vulkan::Vulkan. VMA and SPIRV-Reflect
+# come from FetchContent and are only fetched when the Vulkan backend is active.
+if(SONNET_USE_VULKAN)
+    FetchContent_Declare(
+        VulkanMemoryAllocator
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+        GIT_TAG v3.1.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(VulkanMemoryAllocator)
+
+    FetchContent_Declare(
+        spirv_reflect
+        GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Reflect.git
+        GIT_TAG main
+        GIT_SHALLOW TRUE
+    )
+    set(SPIRV_REFLECT_EXECUTABLE OFF CACHE BOOL "" FORCE)
+    set(SPIRV_REFLECT_STATIC_LIB ON  CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(spirv_reflect)
 endif()

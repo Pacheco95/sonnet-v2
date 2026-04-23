@@ -8,6 +8,7 @@
 #include <sonnet/api/render/IVertexInputState.h>
 #include <sonnet/api/render/RenderState.h>
 #include <sonnet/api/render/VertexLayout.h>
+#include <sonnet/core/RendererTraits.h>
 #include <sonnet/core/Types.h>
 
 #include <cstdint>
@@ -80,6 +81,9 @@ public:
     [[nodiscard]] virtual ITextureFactory  &textureFactory()       = 0;
     [[nodiscard]] virtual IRenderTargetFactory &renderTargetFactory() = 0;
     [[nodiscard]] virtual IGpuMeshFactory  &gpuMeshFactory()       = 0;
+
+    // Backend identity for math/NDC corrections (clip-space Y flip, Z range).
+    [[nodiscard]] virtual const core::RendererTraits &traits() const = 0;
 };
 
 // Forward-declared factory interfaces (defined alongside their products)
