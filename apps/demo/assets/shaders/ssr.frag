@@ -2,12 +2,12 @@
 in  vec2 vUV;
 out vec4 fragColor; // rgb = reflection colour, a = unused
 
-uniform sampler2D uDepth;           // G-buffer depth [0,1]
-uniform sampler2D uNormalMetallic;  // G-buffer attachment 1: world normal.rgb + metallic.a
-uniform sampler2D uAlbedoRoughness; // G-buffer attachment 0: albedo.rgb + roughness.a
-uniform sampler2D uHDRColor;        // HDR lit result — the reflection source
+layout(SET(1,0)) uniform sampler2D uDepth;           // G-buffer depth [0,1]
+layout(SET(1,1)) uniform sampler2D uNormalMetallic;  // world normal.rgb + metallic.a
+layout(SET(1,2)) uniform sampler2D uAlbedoRoughness; // albedo.rgb + roughness.a
+layout(SET(1,3)) uniform sampler2D uHDRColor;        // HDR lit result — the reflection source
 
-layout(std140, binding = 0) uniform CameraUBO {
+layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPosition;
@@ -15,13 +15,30 @@ layout(std140, binding = 0) uniform CameraUBO {
     mat4 uInvProjection;
 };
 
-uniform vec2  uResolution;          // framebuffer size in pixels
-
-uniform int   uMaxSteps;            // max ray steps (32–128)
-uniform float uStepSize;            // initial step length in view-space units
-uniform float uThickness;           // depth-test tolerance (view-space)
-uniform float uMaxDistance;         // ray travel cutoff (view-space)
-uniform float uRoughnessMax;        // fragments rougher than this are skipped
+// All six SSR tuning parameters sum to 28 bytes — comfortably in push constants.
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    vec2  uResolution;   // framebuffer size in pixels
+    int   uMaxSteps;
+    float uStepSize;
+    float uThickness;
+    float uMaxDistance;
+    float uRoughnessMax;
+} pc;
+#define uResolution    pc.uResolution
+#define uMaxSteps      pc.uMaxSteps
+#define uStepSize      pc.uStepSize
+#define uThickness     pc.uThickness
+#define uMaxDistance   pc.uMaxDistance
+#define uRoughnessMax  pc.uRoughnessMax
+#else
+uniform vec2  uResolution;
+uniform int   uMaxSteps;
+uniform float uStepSize;
+uniform float uThickness;
+uniform float uMaxDistance;
+uniform float uRoughnessMax;
+#endif
 
 // Reconstruct view-space position from a screen UV and a raw depth value.
 vec3 viewPosFromDepth(vec2 uv, float depth) {

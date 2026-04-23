@@ -4,15 +4,23 @@ layout(location = 6) in ivec4 aBoneIndices;
 layout(location = 7) in vec4  aBoneWeights;
 
 const int MAX_BONES = 128;
-uniform mat4 uBoneMatrices[MAX_BONES];
 
-layout(std140, binding = 0) uniform CameraUBO {
+layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPosition;
     mat4 uInvViewProj;
     mat4 uInvProjection;
 };
+
+#ifdef VULKAN
+layout(std140, SET(2,0)) uniform PerDraw {
+    mat4 uBoneMatrices[MAX_BONES];
+} pd;
+#define uBoneMatrices pd.uBoneMatrices
+#else
+uniform mat4 uBoneMatrices[MAX_BONES];
+#endif
 
 void main() {
     mat4 skinMatrix = aBoneWeights.x * uBoneMatrices[aBoneIndices.x]

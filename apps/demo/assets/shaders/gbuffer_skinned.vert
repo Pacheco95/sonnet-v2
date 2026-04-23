@@ -10,15 +10,34 @@ layout(location = 6) in ivec4 aBoneIndices;
 layout(location = 7) in vec4  aBoneWeights;
 
 const int MAX_BONES = 128;
-uniform mat4 uBoneMatrices[MAX_BONES];
 
-layout(std140, binding = 0) uniform CameraUBO {
+layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uView;
     mat4 uProjection;
     vec3 uViewPosition;
     mat4 uInvViewProj;
     mat4 uInvProjection;
 };
+
+// Bone matrices (128 × mat4 = 8 KB) don't fit in push constants; they live in
+// the set=2 PerDraw UBO. Shared between gbuffer_skinned.vert and its matching
+// fragment shader (plain gbuffer.frag) for push-constant material scalars.
+#ifdef VULKAN
+layout(std140, SET(2,0)) uniform PerDraw {
+    mat4 uBoneMatrices[MAX_BONES];
+} pd;
+#define uBoneMatrices pd.uBoneMatrices
+layout(push_constant) uniform Push {
+    mat4  uModel;
+    vec3  uEmissiveFactor;
+    float uMetallic;
+    float uRoughness;
+    vec4  uAlbedoFactor;
+    float uAlphaCutoff;
+} pc;
+#else
+uniform mat4 uBoneMatrices[MAX_BONES];
+#endif
 
 out vec3 vFragPos;   // world-space position
 out vec2 vTexCoord;
