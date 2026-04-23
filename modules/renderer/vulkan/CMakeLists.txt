@@ -34,6 +34,7 @@ target_link_libraries(sonnet_renderer_vulkan
     PRIVATE
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
+        spirv-reflect-static      # SPIR-V reflection for descriptor layouts
         glfw                      # glfwCreateWindowSurface (via GLFWWindow)
         spdlog::spdlog
 )
