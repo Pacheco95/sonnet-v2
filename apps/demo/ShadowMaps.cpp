@@ -13,7 +13,7 @@
 using namespace sonnet::api::render;
 
 ShadowMaps::ShadowMaps(sonnet::renderer::frontend::Renderer        &renderer,
-                        sonnet::renderer::opengl::GlRendererBackend &backend,
+                        sonnet::api::render::IRendererBackend &backend,
                         sonnet::core::ShaderHandle shadowShader,
                         sonnet::core::ShaderHandle ptShadowShader)
     : m_renderer(renderer), m_backend(backend)

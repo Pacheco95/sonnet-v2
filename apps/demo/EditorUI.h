@@ -5,16 +5,15 @@
 #include "ShadowMaps.h"
 
 #include <sonnet/api/render/FrameContext.h>
+#include <sonnet/api/render/IRendererBackend.h>
 #include <sonnet/input/InputSystem.h>
 #include <sonnet/renderer/frontend/Renderer.h>
-#include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/physics/PhysicsSystem.h>
 #include <sonnet/scene/SceneLoader.h>
 #include <sonnet/scripting/LuaScriptRuntime.h>
 #include <sonnet/world/GameObject.h>
 #include <sonnet/world/Scene.h>
 
-#include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <imgui.h>
@@ -83,14 +82,14 @@ struct EditorParams {
 
 class EditorUI {
 public:
-    EditorUI(sonnet::renderer::frontend::Renderer         &renderer,
-             sonnet::renderer::opengl::GlRendererBackend  &backend,
-             sonnet::world::Scene                         &scene,
-             sonnet::scripting::LuaScriptRuntime          &scripts,
-             const sonnet::scene::LoadedScene             &loaded,
-             const PostProcess                            &pp,
-             sonnet::physics::PhysicsSystem               &physics,
-             const char                                   *sceneFilePath);
+    EditorUI(sonnet::renderer::frontend::Renderer  &renderer,
+             sonnet::api::render::IRendererBackend &backend,
+             sonnet::world::Scene                  &scene,
+             sonnet::scripting::LuaScriptRuntime   &scripts,
+             const sonnet::scene::LoadedScene      &loaded,
+             const PostProcess                     &pp,
+             sonnet::physics::PhysicsSystem        &physics,
+             const char                            *sceneFilePath);
 
     // Draw all editor panels for this frame (called between imgui.begin/end).
     void draw(EditorParams &p);
@@ -112,8 +111,8 @@ private:
     void saveSceneImpl();
 
     // References to engine / scene systems
-    sonnet::renderer::frontend::Renderer        &m_renderer;
-    sonnet::renderer::opengl::GlRendererBackend &m_backend;
+    sonnet::renderer::frontend::Renderer  &m_renderer;
+    sonnet::api::render::IRendererBackend &m_backend;
     sonnet::world::Scene                        &m_scene;
     sonnet::scripting::LuaScriptRuntime         &m_scripts;
     const sonnet::scene::LoadedScene            &m_loaded;

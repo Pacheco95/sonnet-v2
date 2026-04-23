@@ -2,8 +2,6 @@
 
 #include <sonnet/api/render/IRendererBackend.h>
 
-#include <glad/glad.h>
-
 #include <algorithm>
 #include <limits>
 #include <queue>
@@ -12,8 +10,8 @@
 
 using namespace sonnet::api::render;
 
-RenderGraph::RenderGraph(sonnet::renderer::frontend::Renderer        &renderer,
-                          sonnet::renderer::opengl::GlRendererBackend &backend)
+RenderGraph::RenderGraph(sonnet::renderer::frontend::Renderer &renderer,
+                         sonnet::api::render::IRendererBackend &backend)
     : m_renderer(renderer), m_backend(backend)
 {}
 
@@ -136,8 +134,9 @@ void RenderGraph::execute(const FrameContext &ctx, glm::ivec2 frameSize)
                                   static_cast<std::uint32_t>(frameSize.y));
 
             if (!pass.clear.colors.empty() || pass.clear.depth.has_value()) {
-                if (pass.clear.depth.has_value())
-                    glDepthMask(GL_TRUE);
+                // Clearing depth requires the write mask to be enabled so
+                // the hardware can actually stamp the clear value.
+                if (pass.clear.depth.has_value()) m_backend.setDepthWrite(true);
 
                 ClearOptions opts;
                 for (const auto &c : pass.clear.colors)

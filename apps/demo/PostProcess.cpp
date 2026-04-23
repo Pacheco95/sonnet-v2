@@ -5,7 +5,6 @@
 #include <sonnet/api/render/RenderItem.h>
 #include <sonnet/world/GameObject.h>
 
-#include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <functional>
@@ -42,15 +41,15 @@ static const RenderState kNoDepth{
     .cull       = CullMode::None,
 };
 
-PostProcess::PostProcess(sonnet::renderer::frontend::Renderer        &renderer,
-                          sonnet::renderer::opengl::GlRendererBackend &backend,
-                          ShaderRegistry                              &shaders,
-                          const RenderTargets                         &rts,
-                          const ShadowMaps                            &shadows,
-                          const IBLMaps                               &ibl,
-                          sonnet::core::GPUMeshHandle                  quadMesh,
-                          sonnet::core::GPUMeshHandle                  sphereMesh,
-                          sonnet::core::MaterialTemplateHandle         emissiveMatTmpl)
+PostProcess::PostProcess(sonnet::renderer::frontend::Renderer  &renderer,
+                         sonnet::api::render::IRendererBackend &backend,
+                         ShaderRegistry                        &shaders,
+                         const RenderTargets                   &rts,
+                         const ShadowMaps                      &shadows,
+                         const IBLMaps                         &ibl,
+                         sonnet::core::GPUMeshHandle            quadMesh,
+                         sonnet::core::GPUMeshHandle            sphereMesh,
+                         sonnet::core::MaterialTemplateHandle   emissiveMatTmpl)
     : m_renderer(renderer), m_backend(backend),
       m_rts(rts), m_shadows(shadows),
       m_quadMesh(quadMesh), m_sphereMesh(sphereMesh),

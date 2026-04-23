@@ -1,14 +1,19 @@
 #pragma once
 
 #include <sonnet/api/render/FrameContext.h>
+#include <sonnet/api/render/IRendererBackend.h>
 #include <sonnet/api/render/Light.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/core/Types.h>
 #include <sonnet/renderer/frontend/Renderer.h>
-#include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/world/Scene.h>
 
-#include <glad/glad.h>
+// Point-shadow cubemap FBO + textures are still raw OpenGL (geometry-shader
+// one-pass rendering). Phase 7 will add cubemap-layered rendering to the
+// backend abstraction and let this file drop its glad dependency entirely.
+#if defined(SONNET_USE_OPENGL)
+#  include <glad/glad.h>
+#endif
 #include <glm/glm.hpp>
 
 #include <array>
@@ -23,10 +28,10 @@ public:
     static constexpr int   POINT_SHADOW_SIZE = 512;
     static constexpr float POINT_SHADOW_FAR  = 25.0f;
 
-    ShadowMaps(sonnet::renderer::frontend::Renderer   &renderer,
-               sonnet::renderer::opengl::GlRendererBackend &backend,
-               sonnet::core::ShaderHandle shadowShader,
-               sonnet::core::ShaderHandle ptShadowShader);
+    ShadowMaps(sonnet::renderer::frontend::Renderer  &renderer,
+               sonnet::api::render::IRendererBackend &backend,
+               sonnet::core::ShaderHandle             shadowShader,
+               sonnet::core::ShaderHandle             ptShadowShader);
 
     // Render CSM cascades + point-light shadow cubemaps.
     // Returns the number of point lights that cast shadows.
@@ -43,8 +48,8 @@ public:
     const std::array<sonnet::core::GPUTextureHandle, MAX_SHADOW_LIGHTS>  &pointShadowHandles() const { return m_pointShadowHandles; }
 
 private:
-    sonnet::renderer::frontend::Renderer         &m_renderer;
-    sonnet::renderer::opengl::GlRendererBackend  &m_backend;
+    sonnet::renderer::frontend::Renderer  &m_renderer;
+    sonnet::api::render::IRendererBackend &m_backend;
 
     // CSM resources
     std::array<sonnet::core::RenderTargetHandle, NUM_CASCADES>      m_csmRTHandles{};

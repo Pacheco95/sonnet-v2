@@ -7,9 +7,9 @@
 #include "ShaderRegistry.h"
 
 #include <sonnet/api/render/FrameContext.h>
+#include <sonnet/api/render/IRendererBackend.h>
 #include <sonnet/api/render/Material.h>
 #include <sonnet/core/Types.h>
-#include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/world/GameObject.h>
 #include <sonnet/world/Scene.h>
 
@@ -62,15 +62,15 @@ struct PostProcessParams {
 
 class PostProcess {
 public:
-    PostProcess(sonnet::renderer::frontend::Renderer         &renderer,
-                sonnet::renderer::opengl::GlRendererBackend  &backend,
-                ShaderRegistry                               &shaders,
-                const RenderTargets                          &rts,
-                const ShadowMaps                             &shadows,
-                const IBLMaps                                &ibl,
-                sonnet::core::GPUMeshHandle                   quadMesh,
-                sonnet::core::GPUMeshHandle                   sphereMesh,
-                sonnet::core::MaterialTemplateHandle          emissiveMatTmpl);
+    PostProcess(sonnet::renderer::frontend::Renderer  &renderer,
+                sonnet::api::render::IRendererBackend &backend,
+                ShaderRegistry                        &shaders,
+                const RenderTargets                   &rts,
+                const ShadowMaps                      &shadows,
+                const IBLMaps                         &ibl,
+                sonnet::core::GPUMeshHandle            quadMesh,
+                sonnet::core::GPUMeshHandle            sphereMesh,
+                sonnet::core::MaterialTemplateHandle   emissiveMatTmpl);
 
     // Run all post-process passes for one frame.
     void execute(const PostProcessParams &p,
@@ -88,8 +88,8 @@ private:
     void fullscreenQuad(sonnet::api::render::MaterialInstance &mat,
                         const sonnet::api::render::FrameContext &ppCtx);
 
-    sonnet::renderer::frontend::Renderer        &m_renderer;
-    sonnet::renderer::opengl::GlRendererBackend &m_backend;
+    sonnet::renderer::frontend::Renderer  &m_renderer;
+    sonnet::api::render::IRendererBackend &m_backend;
     const RenderTargets                         &m_rts;
     const ShadowMaps                            &m_shadows;
     sonnet::core::GPUMeshHandle                  m_quadMesh{};

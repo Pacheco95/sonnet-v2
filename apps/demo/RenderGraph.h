@@ -1,9 +1,9 @@
 #pragma once
 
 #include <sonnet/api/render/FrameContext.h>
+#include <sonnet/api/render/IRendererBackend.h>
 #include <sonnet/core/Types.h>
 #include <sonnet/renderer/frontend/Renderer.h>
-#include <sonnet/renderer/opengl/GlRendererBackend.h>
 
 #include <glm/glm.hpp>
 
@@ -49,8 +49,8 @@ public:
         const sonnet::api::render::FrameContext &ctx,
         const sonnet::api::render::FrameContext &ppCtx)>;
 
-    RenderGraph(sonnet::renderer::frontend::Renderer        &renderer,
-                sonnet::renderer::opengl::GlRendererBackend &backend);
+    RenderGraph(sonnet::renderer::frontend::Renderer &renderer,
+                sonnet::api::render::IRendererBackend &backend);
 
     // ── Registration ─────────────────────────────────────────────────────────
 
@@ -94,8 +94,8 @@ private:
         ExecuteFn                                      execute;
     };
 
-    sonnet::renderer::frontend::Renderer        &m_renderer;
-    sonnet::renderer::opengl::GlRendererBackend &m_backend;
+    sonnet::renderer::frontend::Renderer  &m_renderer;
+    sonnet::api::render::IRendererBackend &m_backend;
 
     std::vector<PassNode>    m_passes;
 

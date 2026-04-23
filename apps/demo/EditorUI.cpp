@@ -8,6 +8,13 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+// glReadPixels is the only raw-GL reach in this file (for the picking pass).
+// Kept OpenGL-only since main_vk.cpp doesn't instantiate EditorUI; a future
+// phase will abstract readback behind IRenderTarget::readPixel.
+#if defined(SONNET_USE_OPENGL)
+#  include <glad/glad.h>
+#endif
+
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -17,14 +24,14 @@
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-EditorUI::EditorUI(sonnet::renderer::frontend::Renderer        &renderer,
-                    sonnet::renderer::opengl::GlRendererBackend &backend,
-                    sonnet::world::Scene                        &scene,
-                    sonnet::scripting::LuaScriptRuntime         &scripts,
-                    const sonnet::scene::LoadedScene            &loaded,
-                    const PostProcess                           &pp,
-                    sonnet::physics::PhysicsSystem              &physics,
-                    const char                                  *sceneFilePath)
+EditorUI::EditorUI(sonnet::renderer::frontend::Renderer  &renderer,
+                   sonnet::api::render::IRendererBackend &backend,
+                   sonnet::world::Scene                  &scene,
+                   sonnet::scripting::LuaScriptRuntime   &scripts,
+                   const sonnet::scene::LoadedScene      &loaded,
+                   const PostProcess                     &pp,
+                   sonnet::physics::PhysicsSystem        &physics,
+                   const char                            *sceneFilePath)
     : m_renderer(renderer), m_backend(backend),
       m_scene(scene), m_scripts(scripts),
       m_loaded(loaded), m_pp(pp),

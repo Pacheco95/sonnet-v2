@@ -14,7 +14,6 @@
 #include <sonnet/input/InputSystem.h>
 #include <sonnet/renderer/frontend/BackendFactory.h>
 #include <sonnet/renderer/frontend/Renderer.h>
-#include <sonnet/renderer/opengl/GlRendererBackend.h>
 #include <sonnet/physics/PhysicsSystem.h>
 #include <sonnet/scene/SceneLoader.h>
 #include <sonnet/scripting/LuaScriptRuntime.h>
@@ -40,11 +39,8 @@ int main() {
     sonnet::window::GLFWInputAdapter adapter{input};
     window.setInputAdapter(&adapter);
 
-    auto backendPtr = sonnet::renderer::frontend::makeBackend(window);
-    // The demo's legacy pass classes (ShadowMaps, PostProcess, EditorUI) still
-    // take a concrete GlRendererBackend&; Phase 7 will rewrite them to use
-    // IRendererBackend&. Until then we downcast here.
-    auto &backend   = dynamic_cast<sonnet::renderer::opengl::GlRendererBackend &>(*backendPtr);
+    auto  backendPtr = sonnet::renderer::frontend::makeBackend(window);
+    auto &backend    = *backendPtr;
     backend.initialize();
 
     sonnet::ui::ImGuiLayer imgui;
