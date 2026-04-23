@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sonnet/core/RendererTraits.h>
 #include <sonnet/world/Transform.h>
 
 #include <glm/glm.hpp>
@@ -16,8 +17,12 @@ struct CameraComponent {
     float far  = 200.0f;
 
     // Perspective projection for the given aspect ratio (width / height).
+    // Picks NDC Z-range (OpenGL [-1,1] vs Vulkan/DX [0,1]) and clip-space
+    // Y-flip from the active renderer traits so matrices feed the right
+    // backend without per-call plumbing.
     [[nodiscard]] glm::mat4 projectionMatrix(float aspect) const {
-        return glm::perspective(glm::radians(fov), aspect, near, far);
+        return sonnet::core::projection::perspective(
+            glm::radians(fov), aspect, near, far);
     }
 
     // View matrix derived from the transform's world matrix.

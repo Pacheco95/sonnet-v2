@@ -3,6 +3,7 @@
 #include "IBL.h" // for RawGLCubeMap
 
 #include <sonnet/api/render/IRenderTarget.h>
+#include <sonnet/core/RendererTraits.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -136,7 +137,7 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
     for (int c = 0; c < NUM_CASCADES; ++c) {
         const float splitDepth = m_csmSplitDepths[c];
 
-        const glm::mat4 cascadeProj = glm::perspective(
+        const glm::mat4 cascadeProj = sonnet::core::projection::perspective(
             glm::radians(camFov), aspect, prevSplit, splitDepth);
         const glm::mat4 invCamVP = glm::inverse(cascadeProj * viewMat);
 
@@ -149,8 +150,8 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
             minX = std::min(minX, ls.x); maxX = std::max(maxX, ls.x);
             minY = std::min(minY, ls.y); maxY = std::max(maxY, ls.y);
         }
-        const glm::mat4 cascadeOrtho =
-            glm::ortho(minX, maxX, minY, maxY, -100.0f, 100.0f);
+        const glm::mat4 cascadeOrtho = sonnet::core::projection::ortho(
+            minX, maxX, minY, maxY, -100.0f, 100.0f);
         m_csmLightSpaceMats[c] = cascadeOrtho * lightView;
 
         m_renderer.bindRenderTarget(m_csmRTHandles[c]);
@@ -175,7 +176,7 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
     }
 
     // ── Point-light shadow cubemaps ───────────────────────────────────────────
-    const glm::mat4 ptShadowProj = glm::perspective(
+    const glm::mat4 ptShadowProj = sonnet::core::projection::perspective(
         glm::radians(90.0f), 1.0f, 0.01f, POINT_SHADOW_FAR);
 
     auto faceViewsFor = [](const glm::vec3 &p) {
