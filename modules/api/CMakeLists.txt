@@ -9,4 +9,7 @@ target_link_libraries(${TARGET_NAME} INTERFACE sonnet::core)
 
 sonnet_add_module_test(sonnet_api
     tests/MaterialTests.cpp
+    tests/VertexAttributeTests.cpp
+    tests/VertexLayoutTests.cpp
+    tests/CPUMeshTests.cpp
 )
