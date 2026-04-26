@@ -50,10 +50,17 @@ VkRendererBackend::VkRendererBackend(api::window::IWindow &window,
 
 VkRendererBackend::~VkRendererBackend() {
     if (m_device) m_device->waitIdle();
-    // Destruction order matters: resources → pipelines/descriptors → device → instance.
+
+    // Destroy command pools first: that frees every recorded reference to
+    // pipelines, descriptors, buffers, and samplers. After this, all the
+    // resource teardowns below run with no live cmd-buffer bindings.
+    m_commandContext.reset();
+
     if (m_imguiPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device->logical(), m_imguiPool, nullptr);
+        m_imguiPool = VK_NULL_HANDLE;
     }
+
     m_uniformRing.reset();
     m_descriptorManager.reset();
     m_pipelineCache.reset();
@@ -62,9 +69,15 @@ VkRendererBackend::~VkRendererBackend() {
     m_textureFactory.reset();
     m_samplerCache.reset();
     m_shaderCompiler.reset();
-    m_commandContext.reset();
+
     m_swapchain.reset();
     m_bindState.reset();
+
+    if (m_surface != VK_NULL_HANDLE && m_instance) {
+        vkDestroySurfaceKHR(m_instance->handle(), m_surface, nullptr);
+        m_surface = VK_NULL_HANDLE;
+    }
+
     m_device.reset();
     m_instance.reset();
 }
@@ -83,15 +96,15 @@ void VkRendererBackend::initialize() {
                                             enableValidation);
 
     // 2. Surface from GLFW.
-    VkSurfaceKHR surface = win.createVulkanSurface(m_instance->handle());
+    m_surface = win.createVulkanSurface(m_instance->handle());
 
     // 3. Device + VMA.
-    m_device = std::make_unique<Device>(*m_instance, surface);
+    m_device = std::make_unique<Device>(*m_instance, m_surface);
 
     // 4. Swapchain (default RT render pass + framebuffers + depth).
     const auto fb = m_window.getFrameBufferSize();
     m_lastFbSize = fb;
-    m_swapchain = std::make_unique<Swapchain>(*m_device, surface, fb.x, fb.y);
+    m_swapchain = std::make_unique<Swapchain>(*m_device, m_surface, fb.x, fb.y);
 
     // 5. Per-frame command context + sync.
     m_commandContext = std::make_unique<CommandContext>(*m_device);
@@ -112,9 +125,13 @@ void VkRendererBackend::initialize() {
     m_uniformRing         = std::make_unique<UniformRing>(*m_device, 2u * 1024u * 1024u);
 
     // 8. Dedicated descriptor pool for ImGui's textures. imgui_impl_vulkan
-    // allocates one combined-image-sampler set per texture.
-    const std::array<VkDescriptorPoolSize, 1> imguiPoolSizes{
+    // (docking branch) also allocates separate SAMPLER and SAMPLED_IMAGE
+    // sets via ImGui_ImplVulkan_AddTexture, so the pool needs capacity for
+    // all three types.
+    const std::array<VkDescriptorPoolSize, 3> imguiPoolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER,                1024},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          1024},
     };
     VkDescriptorPoolCreateInfo imguiPoolInfo{};
     imguiPoolInfo.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -208,6 +225,11 @@ void VkRendererBackend::endFrame() {
     vkCmdEndRenderPass(frame.cmd);
     VK_CHECK(vkEndCommandBuffer(frame.cmd));
 
+    // renderFinished is per-swapchain-image (owned by Swapchain) so that with
+    // N images and fewer frame slots, a semaphore is never re-signaled while
+    // its previous present is still in flight.
+    const VkSemaphore presentReady = m_swapchain->renderFinished(m_pendingImageIndex);
+
     const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submit{};
     submit.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -217,10 +239,10 @@ void VkRendererBackend::endFrame() {
     submit.commandBufferCount   = 1;
     submit.pCommandBuffers      = &frame.cmd;
     submit.signalSemaphoreCount = 1;
-    submit.pSignalSemaphores    = &frame.renderFinished;
+    submit.pSignalSemaphores    = &presentReady;
     VK_CHECK(vkQueueSubmit(m_device->graphicsQueue(), 1, &submit, frame.inFlight));
 
-    const VkResult pres = m_swapchain->present(m_pendingImageIndex, frame.renderFinished);
+    const VkResult pres = m_swapchain->present(m_pendingImageIndex, presentReady);
     if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) {
         m_resizeRequested = true;
     } else if (pres != VK_SUCCESS) {
@@ -455,6 +477,16 @@ void VkRendererBackend::renderImGui() {
     auto *draw = ImGui::GetDrawData();
     if (!draw || draw->CmdListsCount == 0) return;
     ImGui_ImplVulkan_RenderDrawData(draw, m_commandContext->current().cmd);
+}
+
+void VkRendererBackend::prepareForShutdown() {
+    if (m_device) m_device->waitIdle();
+    // Destroying the command context releases every recorded reference to
+    // descriptors, pipelines, buffers and samplers. After this returns,
+    // application-owned resources can destruct in any order with no
+    // validation noise.
+    m_commandContext.reset();
+    m_initialized = false;
 }
 
 // ── Private ────────────────────────────────────────────────────────────────────

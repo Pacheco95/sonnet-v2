@@ -166,6 +166,11 @@ int main() {
         input.nextFrame();
     }
 
+    // prepareForShutdown destroys the backend's per-frame command pools, which
+    // releases every recorded reference to ImGui's per-frame vertex/index
+    // buffers, font sampler and pipelines. It must run *before*
+    // imgui.shutdown(), which is what actually destroys those ImGui resources.
+    backend->prepareForShutdown();
     imgui.shutdown();
     return 0;
 }

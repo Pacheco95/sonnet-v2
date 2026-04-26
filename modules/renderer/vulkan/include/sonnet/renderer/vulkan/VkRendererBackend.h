@@ -101,6 +101,13 @@ public:
     [[nodiscard]] ImGuiInitInfo imGuiInitInfo() const;
     void renderImGui();
 
+    // Release all recorded GPU work so that resources obtained via this
+    // backend's factories (buffers, shaders, vertex-input states, ...) can
+    // safely be destroyed afterwards. Must be called after the last frame
+    // and before any factory-returned resource goes out of scope. After this
+    // call no further beginFrame/drawIndexed work is possible.
+    void prepareForShutdown();
+
 private:
     api::window::IWindow                         &m_window;
     api::render::BackendCreateOptions             m_opts;
@@ -133,6 +140,10 @@ private:
     VkRenderPass             m_activeRenderPass  = VK_NULL_HANDLE;
     std::uint32_t            m_activeColorCount  = 1;
     bool                     m_activeHasDepth    = true;
+
+    // GLFW-created surface. Owned here so the destructor can free it after
+    // the swapchain (which uses it) but before the instance.
+    VkSurfaceKHR             m_surface           = VK_NULL_HANDLE;
 
     // Dedicated descriptor pool for imgui_impl_vulkan. ImGui manages its own
     // allocations from this pool (one per texture it needs to sample).

@@ -20,14 +20,18 @@ namespace {
 constexpr std::uint32_t kMaxSetsPerFrame                  = 512;
 constexpr std::uint32_t kMaxUniformBuffersPerFrame        = 1024;
 constexpr std::uint32_t kMaxCombinedImageSamplersPerFrame = 4096;
+constexpr std::uint32_t kMaxSamplersPerFrame              = 256;
+constexpr std::uint32_t kMaxSampledImagesPerFrame         = 1024;
 
 } // namespace
 
 DescriptorManager::DescriptorManager(Device &device, BindState &bindState)
     : m_device(device), m_bindState(bindState) {
-    const std::array<VkDescriptorPoolSize, 2> sizes{
+    const std::array<VkDescriptorPoolSize, 4> sizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         kMaxUniformBuffersPerFrame},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxCombinedImageSamplersPerFrame},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER,                kMaxSamplersPerFrame},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          kMaxSampledImagesPerFrame},
     };
 
     VkDescriptorPoolCreateInfo info{};

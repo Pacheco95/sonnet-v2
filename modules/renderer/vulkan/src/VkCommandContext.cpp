@@ -30,14 +30,12 @@ CommandContext::CommandContext(Device &device) : m_device(device) {
         VkSemaphoreCreateInfo sem{};
         sem.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VK_CHECK(vkCreateSemaphore(d, &sem, nullptr, &f.imageAvailable));
-        VK_CHECK(vkCreateSemaphore(d, &sem, nullptr, &f.renderFinished));
     }
 }
 
 CommandContext::~CommandContext() {
     VkDevice d = m_device.logical();
     for (auto &f : m_frames) {
-        if (f.renderFinished != VK_NULL_HANDLE) vkDestroySemaphore(d, f.renderFinished, nullptr);
         if (f.imageAvailable != VK_NULL_HANDLE) vkDestroySemaphore(d, f.imageAvailable, nullptr);
         if (f.inFlight       != VK_NULL_HANDLE) vkDestroyFence(d, f.inFlight, nullptr);
         if (f.pool           != VK_NULL_HANDLE) vkDestroyCommandPool(d, f.pool, nullptr);

@@ -41,6 +41,11 @@ public:
     [[nodiscard]] std::uint32_t imageCount()  const { return static_cast<std::uint32_t>(m_images.size()); }
     [[nodiscard]] VkRenderPass defaultRenderPass() const { return m_defaultRenderPass; }
     [[nodiscard]] VkFramebuffer framebuffer(std::uint32_t i) const { return m_framebuffers[i]; }
+    // Per-image semaphore signaled by the queue submit and waited on by the
+    // present. Per-image (not per-frame-in-flight) so that with N images and
+    // M < N frame slots, a semaphore is never signaled while a previous
+    // present still holds it.
+    [[nodiscard]] VkSemaphore  renderFinished(std::uint32_t i) const { return m_renderFinished[i]; }
 
 private:
     void create(std::uint32_t fbWidth, std::uint32_t fbHeight);
@@ -74,6 +79,8 @@ private:
 
     VkRenderPass                  m_defaultRenderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer>    m_framebuffers;
+
+    std::vector<VkSemaphore>      m_renderFinished;
 };
 
 } // namespace sonnet::renderer::vulkan

@@ -10,8 +10,9 @@ namespace sonnet::renderer::vulkan {
 class Device;
 
 // Per-frame-in-flight command resources: a command pool, its primary command
-// buffer, and the three sync primitives (imageAvailable / renderFinished /
-// inFlightFence). Double-buffered with kFramesInFlight = 2.
+// buffer, and two sync primitives (imageAvailable + inFlightFence).
+// renderFinished lives on Swapchain (per-image), not here. Double-buffered
+// with kFramesInFlight = 2.
 class CommandContext {
 public:
     static constexpr std::uint32_t kFramesInFlight = 2;
@@ -27,7 +28,6 @@ public:
         VkCommandBuffer cmd             = VK_NULL_HANDLE;
         VkFence         inFlight        = VK_NULL_HANDLE;
         VkSemaphore     imageAvailable  = VK_NULL_HANDLE;
-        VkSemaphore     renderFinished  = VK_NULL_HANDLE;
     };
 
     // Advance to the next frame slot, wait for its fence, reset its pool.

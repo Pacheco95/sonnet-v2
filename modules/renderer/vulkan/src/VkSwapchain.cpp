@@ -113,10 +113,23 @@ void Swapchain::create(std::uint32_t fbWidth, std::uint32_t fbHeight) {
     createDepthResources();
     createDefaultRenderPass();
     createFramebuffers();
+
+    m_renderFinished.resize(m_images.size());
+    for (auto &sem : m_renderFinished) {
+        VkSemaphoreCreateInfo semInfo{};
+        semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        VK_CHECK(vkCreateSemaphore(m_device.logical(), &semInfo, nullptr, &sem));
+    }
 }
 
 void Swapchain::destroy() {
     VkDevice d = m_device.logical();
+
+    for (auto sem : m_renderFinished) {
+        if (sem != VK_NULL_HANDLE) vkDestroySemaphore(d, sem, nullptr);
+    }
+    m_renderFinished.clear();
+
     for (auto fb : m_framebuffers) {
         if (fb != VK_NULL_HANDLE) vkDestroyFramebuffer(d, fb, nullptr);
     }
