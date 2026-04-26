@@ -1,275 +1,74 @@
-# Shadow Maps
+# Shadow maps (demo)
 
-This document explains how directional shadow mapping is implemented in Sonnet v2, covering the mathematical foundation, the three-pass GPU pipeline, and the engine-level plumbing that makes it work.
+The demo's shadow system, implemented in `apps/demo/ShadowMaps.{h,cpp}`, produces:
 
----
+- **Cascaded shadow maps (CSM)** for the single directional light — `NUM_CASCADES = 3`, each `2048×2048` Depth24 with hardware shadow comparison enabled.
+- **Omnidirectional point-light shadows** for up to `MAX_SHADOW_LIGHTS = 4` point lights — one `512×512` R32F cubemap per light, recording linear distance from the light.
 
-## 1. The Core Idea
+The deferred lighting pass (`shaders/deferred_lighting.frag`) consumes both sets when shading.
 
-A shadow map answers one question: **is a given surface point visible from the light source?**
+## Why a shadow map at all?
 
-The answer is found by comparing two depths measured along the direction from the light:
+A shadow map answers one question: **is a given surface point visible from the light?** It is a depth (or distance) texture rendered from the light's point of view; during shading, each fragment's projected depth is compared against the closest occluder recorded in the shadow map. If the fragment is farther, something is in between — it is in shadow.
 
-- The **closest depth** stored in the shadow map — the nearest surface the light can reach.
-- The **current fragment's depth** from the light's perspective — how far this fragment is from the light.
+## Directional shadows: cascaded shadow maps
 
-If the current fragment is farther from the light than the closest recorded depth, something else is in between: the fragment is in shadow.
+A single directional shadow map sized to cover the entire view frustum wastes resolution far away from the camera and lacks resolution near it. CSM splits the camera frustum into depth slices ("cascades") and renders one shadow map per slice. Near slices use small frustums and produce dense texels; far slices use large frustums and produce sparse texels.
 
-```
-Light
- │
- │← closest depth (stored in shadow map) ── Occluder
- │
- │← fragment depth ────────────────────── Fragment (in shadow)
-```
+Each frame, `ShadowMaps::render()`:
 
-The shadow map is a 2D depth texture rendered from the light's point of view. It is sampled during the main scene pass to decide how much light reaches each fragment.
+1. Picks split distances along the camera's near→far range, blending logarithmic and uniform schemes (the classic PSSM mix). Splits land in `m_csmSplitDepths`.
+2. For each cascade, computes the eight world-space corners of the camera sub-frustum bounded by `[splitNear, splitFar]`, transforms them into the directional-light's view space, fits a tight axis-aligned box, and stabilises it (snap to texel grid + extend along light-Z) to reduce shimmer.
+3. Builds `lightProj × lightView` per cascade and stores it in `m_csmLightSpaceMats`.
+4. Renders each enabled `RenderComponent` into the cascade's depth-only RT using a minimal "shadow" shader (vertex transforms position into light clip space; fragment is empty — depth is written automatically).
 
----
+The cascade depth RTs are created with `SamplerDesc::depthCompare = true`, which sets `GL_TEXTURE_COMPARE_MODE = GL_COMPARE_REF_TO_TEXTURE` and `GL_TEXTURE_COMPARE_FUNC = GL_LEQUAL`. Sampling these textures via `sampler2DShadow` returns a hardware-filtered `[0, 1]` shadow factor rather than a raw depth — bilinear filtering then gives 4× free PCF samples per `texture()` call.
 
-## 2. Coordinate Spaces
-
-Three coordinate spaces are involved:
-
-| Space | Description |
-|---|---|
-| **World space** | Shared space for all objects and the light. |
-| **Light space** | The light's own view+projection, used during the shadow pass. |
-| **NDC (light)** | Normalised device coordinates after the light projection. Depth is in `[0, 1]`. |
-
-The transformation from world space to light-space NDC is encoded in a single matrix called the **light-space matrix**:
-
-```
-lightSpaceMat = lightProj × lightView
-```
-
-Every vertex's world-space position is multiplied by this matrix in the main vertex shader to produce `vLightSpacePos`, which is then used in the fragment shader to look up the shadow map.
-
----
-
-## 3. Light-Space Matrix Construction
-
-The directional light is treated as infinitely far away. Its position is simulated by placing a virtual camera far along the light direction, pointed at the scene origin:
-
-```cpp
-// apps/demo/main.cpp
-const glm::vec3 lightDirNorm = glm::normalize(lightDir);
-const glm::vec3 lightUp = std::abs(lightDirNorm.y) > 0.99f
-                        ? glm::vec3{0.0f, 0.0f, 1.0f}   // avoid gimbal lock
-                        : glm::vec3{0.0f, 1.0f, 0.0f};
-
-const glm::mat4 lightView = glm::lookAt(
-    lightDirNorm * 10.0f,   // camera position (10 units along light dir)
-    glm::vec3{0.0f},        // look at scene origin
-    lightUp
-);
-
-const glm::mat4 lightProj = glm::ortho(-4.0f, 4.0f, -4.0f, 4.0f, 1.0f, 20.0f);
-const glm::mat4 lightSpaceMat = lightProj * lightView;
-```
-
-**Why orthographic?** A directional light has parallel rays — there is no perspective foreshortening. `glm::ortho` produces a parallel projection that maps the shadow frustum (an axis-aligned box in light space) into NDC. The bounds `±4.0` were chosen to cover the 6×6 floor and the rotating cube at the scene origin; `near=1.0` and `far=20.0` bound the depth range.
-
-The `lightUp` guard handles the degenerate case where the light direction is nearly straight up or down: in that case the world Y axis cannot serve as the up vector for `glm::lookAt`, so the Z axis is used instead.
-
----
-
-## 4. The Three-Pass Pipeline
-
-Each frame executes three sequential render passes.
-
-```
-┌─────────────────────────────────────────────────────┐
-│ Pass 1 – Shadow                                     │
-│   RT:  shadowRT (2048×2048, depth only)             │
-│   View: light-space orthographic                    │
-│   Output: depth texture (shadow map)                │
-└─────────────────────────────────────────────────────┘
-                        │ shadow map
-                        ▼
-┌─────────────────────────────────────────────────────┐
-│ Pass 2 – HDR Scene                                  │
-│   RT:  hdrRT (framebuffer size, RGBA16F + depth)    │
-│   View: camera perspective                          │
-│   Output: HDR colour texture                        │
-└─────────────────────────────────────────────────────┘
-                        │ HDR colour texture
-                        ▼
-┌─────────────────────────────────────────────────────┐
-│ Pass 3 – Tone-map                                   │
-│   RT:  default framebuffer                          │
-│   Draw: fullscreen quad                             │
-│   Output: LDR colour → display                      │
-└─────────────────────────────────────────────────────┘
-```
-
-### Pass 1 — Shadow Map
-
-The shadow render target is a depth-only framebuffer (no colour attachments):
-
-```cpp
-const auto shadowRTHandle = renderer.createRenderTarget(RenderTargetDesc{
-    .width  = SHADOW_SIZE,   // 2048
-    .height = SHADOW_SIZE,
-    .colors = {},            // no colour
-    .depth  = TextureAttachmentDesc{
-        .format      = TextureFormat::Depth24,
-        .samplerDesc = {
-            .minFilter = MinFilter::Nearest,
-            .magFilter = MagFilter::Nearest,
-            .wrapS     = TextureWrap::ClampToEdge,
-            .wrapT     = TextureWrap::ClampToEdge,
-        },
-    },
-});
-```
-
-`Nearest` filtering is deliberate — the PCF kernel (described in Section 6) manually samples neighbouring texels and averages, so hardware bilinear filtering on the depth texture would produce incorrect comparisons. `ClampToEdge` ensures that sampling beyond the shadow frustum boundary returns the edge depth value rather than wrapping, which would create false shadow artefacts.
-
-When `colors` is empty, `GlRenderTarget::attachColorTextures` calls `glDrawBuffer(GL_NONE)` and `glReadBuffer(GL_NONE)` to tell OpenGL that this framebuffer intentionally has no colour output.
-
-The shadow vertex shader only needs to transform geometry into light space:
+Inside the deferred lighting shader the cascade is selected by view-space depth:
 
 ```glsl
-// SHADOW_VERT
-layout(location = 0) in vec3 aPosition;
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
-
-void main() {
-    gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
-}
+int cascade = 0;
+for (int c = 0; c < NUM_CASCADES; ++c)
+    if (viewZ < uCsmSplitDepths[c]) { cascade = c; break; }
+vec4 lightSpace = uCsmLightSpaceMats[cascade] * vec4(worldPos, 1.0);
 ```
 
-The fragment shader is empty — OpenGL writes the interpolated depth to the depth buffer automatically.
+A small per-cascade PCF kernel (3×3 around the projected coord) builds on the hardware sampling and produces the directional shadow factor.
 
-The same scene geometry (cube + floor) is submitted through a shadow-pass queue, but with the shadow material bound instead of the lit material.
+### Bias
 
-### Pass 2 — HDR Scene
-
-The main scene is rendered into a 16-bit floating-point colour target. The `FrameContext` carries both the camera matrices and the light-space matrix so the renderer can upload `uLightSpaceMatrix` to the scene shader:
-
-```cpp
-// modules/renderer/frontend/src/Renderer.cpp  —  bindMaterial()
-if (ctx.lightSpaceMatrix) {
-    upload("uLightSpaceMatrix", *ctx.lightSpaceMatrix);
-}
-```
-
-The shadow depth texture is bound to `uShadowMap` in the material alongside `uAlbedo`. The vertex shader computes `vLightSpacePos` per-vertex; the fragment shader samples the shadow map to decide the shadow factor.
-
-### Pass 3 — Tone-map
-
-A fullscreen quad converts HDR radiance values to display-range colours using the ACES filmic curve. Shadow mapping has no role in this pass.
-
----
-
-## 5. Engine Plumbing
-
-### Depth Texture as a Sampled Resource
-
-The shadow depth texture lives inside the render target. To bind it as a `uShadowMap` sampler in the scene shader, it needs to be exposed as a `GPUTextureHandle`. `Renderer::depthTextureHandle` creates a **non-owning** wrapper:
-
-```cpp
-// modules/renderer/frontend/src/Renderer.cpp
-GPUTextureHandle Renderer::depthTextureHandle(RenderTargetHandle handle) {
-    const ITexture *tex = it->second->depthTexture();
-    GPUTextureHandle texHandle{m_nextId++};
-    m_textures.emplace(texHandle, std::make_unique<BorrowedTexture>(tex));
-    return texHandle;
-}
-```
-
-`BorrowedTexture` (defined at the top of `Renderer.cpp`) implements `ITexture` by forwarding all calls to the real texture owned by the render target. This allows the depth attachment to appear in the `m_textures` map and be bound like any other texture, without transferring ownership. Destroying the render target while the borrowed handle is still in use would dangle the pointer — the caller is responsible for ensuring the render target outlives any handles derived from it.
-
-### FrameContext and lightSpaceMatrix
-
-`FrameContext` is the per-frame data block passed to `Renderer::render`. The light-space matrix is carried as `std::optional<glm::mat4>` so it is absent in frames that do not use shadow mapping (such as the tone-map pass):
-
-```cpp
-// modules/api/include/sonnet/api/render/FrameContext.h
-struct FrameContext {
-    const glm::mat4 &viewMatrix;
-    const glm::mat4 &projectionMatrix;
-    // ...
-    std::optional<glm::mat4> lightSpaceMatrix;
-};
-```
-
-`Renderer::bindMaterial` only uploads `uLightSpaceMatrix` when the optional is populated, so shaders that do not declare this uniform are unaffected.
-
----
-
-## 6. PCF Shadow Filtering
-
-Raw shadow mapping produces hard, aliased edges because each fragment either fully passes or fully fails the depth comparison. **Percentage Closer Filtering (PCF)** softens the edges by sampling a neighbourhood of texels and averaging the per-sample pass/fail results.
-
-The fragment shader samples a 3×3 kernel centred on the projected shadow-map coordinate:
+A constant bias is too coarse: surfaces nearly parallel to the light direction self-shadow at glancing angles. The shader scales bias by the angle between surface normal and light direction, with a floor:
 
 ```glsl
-float shadowFactor(vec3 n) {
-    // Transform from clip space to [0, 1] UV range.
-    vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
-    proj = proj * 0.5 + 0.5;
-
-    // Fragments outside the shadow frustum are fully lit.
-    if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 ||
-                        proj.y < 0.0 || proj.y > 1.0)
-        return 1.0;
-
-    float bias = max(uShadowBias * (1.0 - dot(n, normalize(uDirLight.direction))),
-                     uShadowBias * 0.1);
-
-    vec2 texelSize = 1.0 / vec2(textureSize(uShadowMap, 0));
-    float shadow = 0.0;
-    for (int x = -1; x <= 1; ++x)
-        for (int y = -1; y <= 1; ++y) {
-            float closest = texture(uShadowMap, proj.xy + vec2(x, y) * texelSize).r;
-            shadow += proj.z - bias > closest ? 0.0 : 1.0;
-        }
-    return shadow / 9.0;
-}
+float bias = max(uShadowBias * (1.0 - dot(N, L)), uShadowBias * 0.1);
 ```
 
-Each of the 9 samples votes 0.0 (in shadow) or 1.0 (lit). The average is a value in `[0, 1]` that acts as a smooth lighting multiplier. Fragments near a shadow boundary receive values between 0 and 1, producing soft penumbra edges.
+`uShadowBias` is exposed in the editor as a slider (default `0.005`).
 
-The return value feeds the diffuse term:
+## Point-light shadows: cubemaps
 
-```glsl
-float shadow = shadowFactor(n);
-vec3 col = (0.15 + diff * uDirLight.intensity * shadow) * uDirLight.color * albedo;
-```
+For each point light that casts shadows (up to `MAX_SHADOW_LIGHTS`), `ShadowMaps` keeps a `512×512` R32F cubemap. The fragment shader writes the linear distance from the light to the fragment instead of a clip-space depth, which lets the lighting pass compare distances directly.
 
-The `0.15` constant is ambient light — fragments in full shadow still receive a small base illumination rather than going completely black.
+The implementation currently uses a raw OpenGL framebuffer with a renderbuffer for depth (`m_pointShadowFBO` / `m_pointShadowRBO`) and a geometry-shader path that emits each triangle to all six faces in one draw call (`shaders/point_shadow.{vert,frag}`). Each cubemap is registered with the engine `Renderer` as a `GPUTextureHandle` via `registerRawTexture`, so the deferred shader can sample it as a normal `samplerCube`.
 
----
+`POINT_SHADOW_FAR = 25.0f` bounds the per-light shadow range. Fragments beyond that distance are considered fully lit (skipping the cubemap sample).
 
-## 7. Shadow Bias
+`pointShadowBias` is exposed alongside the directional bias in the editor.
 
-Depth buffer precision is finite. Without a bias, a surface comparing its own depth against the shadow map often sees its stored depth as very slightly closer, causing the surface to shadow itself — a pattern of dark stripes called **shadow acne**.
+## Plumbing
 
-A constant bias offset alone is insufficient: the error grows on surfaces that are nearly parallel to the light direction (glancing angles). The implemented bias scales with the angle between the surface normal and the light direction:
+`ShadowMaps::render()` returns the number of point lights that produced shadow data this frame. The deferred lighting material reads:
 
-```glsl
-float bias = max(uShadowBias * (1.0 - dot(n, normalize(uDirLight.direction))),
-                 uShadowBias * 0.1);
-```
+- `uCsmLightSpaceMats[NUM_CASCADES]` — per-cascade matrix.
+- `uCsmSplitDepths[NUM_CASCADES]` — per-cascade view-space far depth.
+- `uShadowMaps[NUM_CASCADES]` — sampler2DShadow array bound from `csmDepthHandles()`.
+- `uPointShadowMaps[MAX_SHADOW_LIGHTS]` — samplerCube array bound from `pointShadowHandles()`.
+- `uShadowBias`, `uPointShadowBias` — tunables.
 
-- When the surface faces the light directly (`dot = 1.0`), the bias is at its minimum: `uShadowBias × 0.1`.
-- As the surface grazes the light (`dot → 0`), the bias approaches `uShadowBias`.
-- The surface normal `n` is the interpolated, normalised fragment normal in world space.
+Shadow rendering happens before the G-buffer pass each frame, since the deferred lighting pass downstream needs all shadow textures populated. The graph in [Render graph](render-graph.md) does **not** schedule shadow passes — `ShadowMaps::render()` is called directly by the demo's main loop.
 
-`uShadowBias` is adjustable at runtime via the ImGui debug panel (range `0.0001` – `0.05`, default `0.005`). Increasing it eliminates acne but pushes shadows away from their casters (peter-panning). The slider allows tuning this trade-off while observing the result live.
+## Known limitations
 
----
-
-## 8. Potential Improvements
-
-| Limitation | Description | Possible fix |
-|---|---|---|
-| Fixed frustum | The `±4.0` ortho bounds are hardcoded to the demo scene. Lights far from the origin or scenes of different scale would lose coverage. | Fit the frustum to the camera's view frustum (Cascaded Shadow Maps) or to the scene's AABB. |
-| Single cascade | Only one shadow map is produced. Objects far from the camera receive the same texel density as nearby objects. | Cascaded Shadow Maps (CSM) divide the view frustum into depth slices, each with its own shadow map. |
-| 3×3 PCF kernel | The 9-sample kernel produces only a modest softening of shadow edges. | A larger Poisson-disk kernel or hardware `sampler2DShadow` with `GL_COMPARE_R_TO_TEXTURE` would improve quality. |
-| Fixed resolution | The shadow map is always 2048×2048. | Expose resolution as a quality setting. |
-| Point lights | Only the directional light casts shadows. | Point-light shadows require cube-map depth targets (six faces per light). |
+- Point-shadow path still uses raw GL (geometry-shader fan-out + manual FBO). Phase 7 of the [Vulkan backend](vulkan-backend.md) work will add cubemap-layered rendering to the engine abstraction so this file can drop its glad dependency entirely.
+- `ShadowMaps` exposes 1 directional + 4 point-light shadow casters. Adding more would require resizing the texture arrays and the deferred shader's uniform bindings.
+- Cascade count is fixed at 3 at compile time.
