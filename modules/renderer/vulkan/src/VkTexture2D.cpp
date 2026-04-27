@@ -301,7 +301,11 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
 
     m_format     = toVkFormat(desc.format, desc.colorSpace);
     m_isDepth    = isDepthFormat(desc.format);
-    m_mipLevels  = 1; // Render targets don't auto-generate mipmaps; per-mip RTs are explicit.
+    // Render targets are explicit about mip count: respect desc.mipLevels when
+    // set (e.g. IBL prefilter cubemaps want mipLevels=5). Otherwise allocate
+    // one level — the IBL/prefilter case is the only consumer of >1 mips for
+    // RTs today.
+    m_mipLevels  = desc.mipLevels > 0 ? desc.mipLevels : 1u;
     m_layerCount = isCube ? 6u : 1u;
 
     VkImageUsageFlags usage = toVkImageUsage(desc.usageFlags)

@@ -25,6 +25,15 @@ struct RenderTargetDesc {
     std::uint32_t                        height;
     std::vector<TextureAttachmentDesc>   colors;
     std::optional<DepthAttachmentDesc>   depth;
+
+    // When true, color attachment 0 (and depth, if it's a TextureAttachmentDesc)
+    // becomes a cubemap with `mipLevels` mip levels and 6 faces. The RT
+    // pre-allocates per-(face, mip) framebuffers; `selectCubemapFace(face, mip)`
+    // chooses which one the next bind() targets. Width/height define the
+    // mip-0 face size. Required for IBL precompute (color cube) and point-light
+    // shadows (depth cube).
+    bool          isCubemap = false;
+    std::uint32_t mipLevels = 1;
 };
 
 class IRenderTarget {
@@ -37,6 +46,12 @@ public:
 
     [[nodiscard]] virtual const ITexture *colorTexture(std::size_t index) const = 0;
     [[nodiscard]] virtual const ITexture *depthTexture()                  const = 0;
+
+    // Select the active face and mip level for cubemap RTs. The next bind()
+    // (or backend-driven pass begin) targets that face/mip. Default
+    // implementation is a no-op so 2D RTs can ignore it.
+    virtual void selectCubemapFace(std::uint32_t /*face*/,
+                                    std::uint32_t /*mipLevel*/ = 0) {}
 
     // Read one RGBA8 pixel from the given color attachment at (x, y). The
     // origin is the bottom-left corner of the attachment (matching OpenGL

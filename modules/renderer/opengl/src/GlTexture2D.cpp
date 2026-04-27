@@ -90,22 +90,38 @@ GlTexture2D::GlTexture2D(const api::render::TextureDesc &desc,
 
     glBindTexture(m_target, m_texture);
 
+    // Explicit mip-level count for RTs that need a chain (IBL prefilter
+    // cubemap = 5 mips). 0 means single mip — matches prior behavior.
+    const GLsizei mipLevels =
+        desc.mipLevels > 0 ? static_cast<GLsizei>(desc.mipLevels) : 1;
+
     const auto fmt = getGlTextureFormat(desc);
     if (m_target == GL_TEXTURE_CUBE_MAP) {
         for (std::uint32_t f = 0; f < 6; ++f) {
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0,
-                         fmt.internalFormat,
-                         static_cast<GLsizei>(desc.size.x),
-                         static_cast<GLsizei>(desc.size.y),
-                         0, fmt.format, fmt.type, nullptr);
+            for (GLsizei mip = 0; mip < mipLevels; ++mip) {
+                const GLsizei mipW = std::max(1, static_cast<GLsizei>(desc.size.x) >> mip);
+                const GLsizei mipH = std::max(1, static_cast<GLsizei>(desc.size.y) >> mip);
+                glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, mip,
+                             fmt.internalFormat, mipW, mipH,
+                             0, fmt.format, fmt.type, nullptr);
+            }
         }
     } else {
-        glTexImage2D(m_target, 0,
-                     fmt.internalFormat,
-                     static_cast<GLsizei>(desc.size.x),
-                     static_cast<GLsizei>(desc.size.y),
-                     0, fmt.format, fmt.type, nullptr);
+        for (GLsizei mip = 0; mip < mipLevels; ++mip) {
+            const GLsizei mipW = std::max(1, static_cast<GLsizei>(desc.size.x) >> mip);
+            const GLsizei mipH = std::max(1, static_cast<GLsizei>(desc.size.y) >> mip);
+            glTexImage2D(m_target, mip,
+                         fmt.internalFormat, mipW, mipH,
+                         0, fmt.format, fmt.type, nullptr);
+        }
     }
+
+    // Cap MAX_LEVEL so sampler filtering doesn't try to read levels we
+    // didn't allocate. applySamplerState will overwrite this only when
+    // requiresMipmaps() AND the texture has CPU data (calls glGenerateMipmap).
+    // For RT cubemaps we render to mips manually, so set the cap explicitly.
+    glTexParameteri(m_target, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(m_target, GL_TEXTURE_MAX_LEVEL, mipLevels - 1);
 
     applySamplerState();
     glBindTexture(m_target, 0);

@@ -32,6 +32,11 @@ struct TextureDesc {
     TextureUsage  usageFlags= TextureUsage::Sampled;
     ColorSpace    colorSpace= ColorSpace::Linear;
     bool          useMipmaps= true;
+    // Explicit mip-level count for allocate-only render-target textures (where
+    // useMipmaps is ignored — the count is exact). 0 means "auto" (1 level for
+    // RTs, full chain for sampled CPU-data textures with useMipmaps=true).
+    // Used by IBL's prefilter cubemap (mipLevels=5).
+    std::uint32_t mipLevels = 0;
 
     bool operator==(const TextureDesc &) const = default;
 };
