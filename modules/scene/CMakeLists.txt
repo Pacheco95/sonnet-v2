@@ -23,4 +23,13 @@ sonnet_add_module_test(sonnet_scene
     tests/SceneLoaderTests.cpp
 )
 
-target_link_libraries(sonnet_scene_tests PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(sonnet_scene_tests PRIVATE
+    nlohmann_json::nlohmann_json
+    sonnet::renderer::frontend
+)
+
+# Reuse the recording mocks defined alongside the api tests so SceneLoader
+# can exercise its renderer-driven asset paths without a GPU context.
+target_include_directories(sonnet_scene_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/modules/api/tests
+)
