@@ -451,11 +451,24 @@ void VkRendererBackend::setUniform(UniformLocation location, const core::Uniform
             }
             return;
         }
-        case ShaderUniformKind::MaterialSampler:
-            // Binding is determined by the slot passed to texture->bind in
-            // Renderer::bindMaterial; the Sampler value itself is irrelevant
-            // under Vulkan.
+        case ShaderUniformKind::MaterialSampler: {
+            // texture->bind(slot) staged the texture in texturesBySlot[slot];
+            // route it to the descriptor binding the shader expects. For
+            // sampler arrays, arrayElement disambiguates uShadowMaps[i] across
+            // entries that share the same binding number.
+            std::uint32_t slot = 0;
+            std::visit([&](auto &&v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, core::Sampler>) {
+                    slot = static_cast<std::uint32_t>(v);
+                }
+            }, value);
+            if (slot >= BindState::kMaxMaterialTextures) return;
+            const auto dstIx = entry->binding + entry->arrayElement;
+            if (dstIx >= BindState::kMaxMaterialTextures) return;
+            m_bindState->materialTextures[dstIx] = m_bindState->texturesBySlot[slot];
             return;
+        }
         case ShaderUniformKind::Unknown:
             return;
     }

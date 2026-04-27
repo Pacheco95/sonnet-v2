@@ -131,32 +131,57 @@ VkDescriptorSet DescriptorManager::allocateMaterialSet1(const VkShader &shader) 
     VkDescriptorSet set = VK_NULL_HANDLE;
     VK_CHECK(vkAllocateDescriptorSets(m_device.logical(), &alloc, &set));
 
+    // Each VkWriteDescriptorSet's pImageInfo must remain stable until the
+    // vkUpdateDescriptorSets call, so collect every image info into a flat
+    // vector (reserved to its final size up front to prevent reallocation
+    // invalidating earlier write pointers) and slice into it per binding.
+    std::size_t totalImageInfos = 0;
+    for (const auto &b : reflection.setBindings[1]) {
+        if (b.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+            b.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) continue;
+        totalImageInfos += b.descriptorCount;
+    }
+
     std::vector<VkDescriptorImageInfo> imageInfos;
     std::vector<VkWriteDescriptorSet>  writes;
-    imageInfos.reserve(reflection.setBindings[1].size());
+    imageInfos.reserve(totalImageInfos);
     writes.reserve(reflection.setBindings[1].size());
 
     for (const auto &b : reflection.setBindings[1]) {
         if (b.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
             b.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE) continue;
-        if (b.binding >= BindState::kMaxMaterialTextures) continue;
 
-        const auto *tex = m_bindState.materialTextures[b.binding];
-        if (!tex) continue;
+        // Validation requires every descriptor in an array binding to be
+        // populated — partial fills are illegal. Skip the entire binding
+        // unless every materialTextures[binding + i] slot has a texture.
+        if (b.binding + b.descriptorCount > BindState::kMaxMaterialTextures) continue;
+        bool allBound = true;
+        for (std::uint32_t i = 0; i < b.descriptorCount; ++i) {
+            if (m_bindState.materialTextures[b.binding + i] == nullptr) {
+                allBound = false;
+                break;
+            }
+        }
+        if (!allBound) continue;
 
-        VkDescriptorImageInfo ii{};
-        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        ii.imageView   = tex->imageView();
-        ii.sampler     = tex->sampler();
-        imageInfos.push_back(ii);
+        const auto firstIx = imageInfos.size();
+        for (std::uint32_t i = 0; i < b.descriptorCount; ++i) {
+            const auto *tex = m_bindState.materialTextures[b.binding + i];
+            VkDescriptorImageInfo ii{};
+            ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            ii.imageView   = tex->imageView();
+            ii.sampler     = tex->sampler();
+            imageInfos.push_back(ii);
+        }
 
         VkWriteDescriptorSet w{};
         w.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w.dstSet          = set;
         w.dstBinding      = b.binding;
-        w.descriptorCount = 1;
+        w.dstArrayElement = 0;
+        w.descriptorCount = b.descriptorCount;
         w.descriptorType  = b.descriptorType;
-        w.pImageInfo      = &imageInfos.back();
+        w.pImageInfo      = imageInfos.data() + firstIx;
         writes.push_back(w);
     }
 

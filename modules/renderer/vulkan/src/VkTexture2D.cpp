@@ -242,18 +242,18 @@ VkTexture2D::~VkTexture2D() {
 }
 
 void VkTexture2D::bind(std::uint8_t slot) const {
-    // The slot value Renderer::bindMaterial iterates (0, 1, 2, ...) matches
-    // the descriptor binding in set=1. Record it for drawIndexed to consume
-    // when building the material descriptor set.
+    // Stage in the slot-keyed table. setUniform(loc, Sampler{slot}) for the
+    // matching MaterialSampler entry will fold this into materialTextures[]
+    // at the descriptor binding (+ array element) the shader actually expects.
     if (slot < BindState::kMaxMaterialTextures) {
-        m_bindState.materialTextures[slot] = this;
+        m_bindState.texturesBySlot[slot] = this;
     }
 }
 
 void VkTexture2D::unbind(std::uint8_t slot) const {
     if (slot < BindState::kMaxMaterialTextures &&
-        m_bindState.materialTextures[slot] == this) {
-        m_bindState.materialTextures[slot] = nullptr;
+        m_bindState.texturesBySlot[slot] == this) {
+        m_bindState.texturesBySlot[slot] = nullptr;
     }
 }
 
