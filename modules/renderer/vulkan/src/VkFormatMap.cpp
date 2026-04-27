@@ -14,6 +14,11 @@ VkFormat toVkFormat(api::render::TextureFormat fmt, api::render::ColorSpace colo
         case F::RGBA16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
         case F::RGBA32F: return VK_FORMAT_R32G32B32A32_SFLOAT;
         case F::R32F:    return VK_FORMAT_R32_SFLOAT;
+        case F::RG16F:   return VK_FORMAT_R16G16_SFLOAT;
+        // Vulkan core lacks RGB16F as a sampled-image format (it's optional).
+        // Most consumer GPUs widen 3-channel to 4 anyway, so map RGB16F to
+        // RGBA16F. The alpha channel is wasted but storage-cost neutral.
+        case F::RGB16F:  return VK_FORMAT_R16G16B16A16_SFLOAT;
         case F::Depth24: return VK_FORMAT_D24_UNORM_S8_UINT;
     }
     throw VulkanError("toVkFormat: unknown TextureFormat");
@@ -68,6 +73,9 @@ std::uint32_t bytesPerPixel(api::render::TextureFormat fmt) {
         case F::RGBA16F: return 8;
         case F::RGBA32F: return 16;
         case F::R32F:    return 4;
+        case F::RG16F:   return 4;
+        // RGB16F widens to RGBA16F in toVkFormat, so storage cost is 8 bytes.
+        case F::RGB16F:  return 8;
         case F::Depth24: return 4; // (D24 stored as 32-bit w/ stencil in most impls)
     }
     throw VulkanError("bytesPerPixel: unknown TextureFormat");

@@ -25,6 +25,8 @@ struct GlTextureFormat {
         case TextureFormat::RGBA16F: return {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT};
         case TextureFormat::RGBA32F: return {GL_RGBA32F, GL_RGBA, GL_FLOAT};
         case TextureFormat::R32F:    return {GL_R32F,    GL_RED,  GL_FLOAT};
+        case TextureFormat::RG16F:   return {GL_RG16F,   GL_RG,   GL_HALF_FLOAT};
+        case TextureFormat::RGB16F:  return {GL_RGB16F,  GL_RGB,  GL_HALF_FLOAT};
         case TextureFormat::Depth24: return {GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT};
     }
     throw std::runtime_error("GlUtils: unsupported texture format");

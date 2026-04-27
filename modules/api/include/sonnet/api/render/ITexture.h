@@ -8,7 +8,17 @@
 
 namespace sonnet::api::render {
 
-enum class TextureFormat  : std::uint8_t { RGB8, RGBA8, RGBA16F, RGBA32F, R32F, Depth24 };
+enum class TextureFormat  : std::uint8_t {
+    RGB8, RGBA8, RGBA16F, RGBA32F, R32F,
+    // Two-channel half-float — used by IBL's split-sum BRDF LUT.
+    RG16F,
+    // Three-channel half-float — used by IBL's HDR equirectangular and
+    // intermediate cubemaps. Note many GPUs lack native 3-channel support
+    // and silently widen to RGBA16F; both backends map this to a 4-channel
+    // image (RGB16F is not core in Vulkan, RGB16F is core in GL 4.6).
+    RGB16F,
+    Depth24,
+};
 enum class TextureWrap    : std::uint8_t { Repeat, ClampToEdge };
 enum class TextureType    : std::uint8_t { Texture2D, CubeMap };
 enum class MagFilter      : std::uint8_t { Nearest, Linear };
