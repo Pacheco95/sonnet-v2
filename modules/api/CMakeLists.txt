@@ -12,4 +12,8 @@ sonnet_add_module_test(sonnet_api
     tests/VertexAttributeTests.cpp
     tests/VertexLayoutTests.cpp
     tests/CPUMeshTests.cpp
+    tests/KeyMapTests.cpp
+    tests/RenderStateTests.cpp
+    tests/TextureDescTests.cpp
+    tests/LightTests.cpp
 )
