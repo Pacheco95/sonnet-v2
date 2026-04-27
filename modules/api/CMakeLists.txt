@@ -16,4 +16,5 @@ sonnet_add_module_test(sonnet_api
     tests/RenderStateTests.cpp
     tests/TextureDescTests.cpp
     tests/LightTests.cpp
+    tests/MockBackendsTests.cpp
 )
