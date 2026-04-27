@@ -340,13 +340,14 @@ mipLevels × 6 framebuffers/views. `IRenderTarget::selectCubemapFace(face,
 mip)` chooses which one bind() reads. `Renderer::selectCubemapFace` exposes
 this through the frontend handle. Both backends implemented.
 
-### 4.4 `point_shadow` + IBL shader rewrites (6-face passes)
+### 4.4 `point_shadow` + IBL shader rewrites (6-face passes) — PARTIAL
 
-**Status:** 8 shader files still use the OpenGL `GL_GEOMETRY_SHADER` trick to emit to all six cubemap faces in one draw. Vulkan (especially MoltenVK on Metal) doesn't support geometry shaders practically. Even the OpenGL path would be cleaner without them.
-
-**Design:** rewrite each pass as a loop of six per-face draws. The calling side (ShadowMaps.cpp, IBL.h) sets the current face via `rt.bindFace(i)`, passes the corresponding view matrix as a uniform, and issues the draw. Shader becomes a simple 2D projection with no `gl_Layer` output.
-
-**Effort:** medium — ~3–5 hours for all eight shaders + call-site updates.
+`point_shadow.{vert,frag}` ported in commit 0e2ade2 — they were already
+single-pass (no geometry-shader trick), so the rewrite was just SET()/push
+convention. The IBL shaders (`ibl/*.{vert,frag}`) are also single-pass
+already (each capture invocation already binds a single face); they will
+need the SET() convention work as part of the IBL.h refactor (4.7) since
+both land at the same time.
 
 ### 4.5 Descriptor arrays (`sampler2DShadow uShadowMaps[3]`) — DONE (commit edfe9ee)
 
@@ -397,16 +398,19 @@ call and caches it for the texture's lifetime. The destructor calls
 `ImGui_ImplVulkan_RemoveTexture` to free it back to the pool (which was already
 created with `FREE_DESCRIPTOR_SET_BIT`).
 
-### 4.9 MoltenVK polish (Phase 5)
+### 4.9 MoltenVK polish (Phase 5) — PARTIAL
 
-**Status:** the portability-enumeration path is already live; MoltenVK loads, presents, and runs `main_vk.cpp` cleanly. What's not done:
+The portability-enumeration path is live; MoltenVK loads, presents, and runs
+`main_vk.cpp` cleanly. Validation-layer Debug build runs zero validation
+errors after this session's work. Commit 1fbc41f added an explicit query of
+`VkPhysicalDevicePortabilitySubsetFeaturesKHR` with warnings for
+mutableComparisonSamplers + imageViewFormatReinterpretation.
 
-- Explicit query of `VkPhysicalDevicePortabilitySubsetFeaturesKHR` and a startup check that none of the features we use are `VK_FALSE`.
-- Validation-layer soak (both `VK_LAYER_KHRONOS_validation` standard validation and best-practices) over 10+ minutes of main_vk.cpp. Currently validation is enabled in Debug but the demo runs in Release.
-- HiDPI verification (`glfwGetFramebufferSize` returns pixels on Metal — confirmed; `surfaceCaps.currentExtent` also in pixels — should re-check on retina).
+Still outstanding:
+- Validation-layer best-practices layer soak over 10+ minutes of main_vk.cpp.
+- HiDPI verification on retina (`glfwGetFramebufferSize` and `currentExtent`
+  parity).
 - README note on `VK_ICD_FILENAMES` if not using the `.pkg` SDK installer.
-
-**Effort:** small — ~2–3 hours.
 
 ### 4.10 Phase 8 hardening
 
@@ -450,6 +454,9 @@ In chronological order on `main`:
 | 23 | `45ca6a9` | Allocate-only cubemap RT path on Vulkan |
 | 24 | `9644fce` | Phase 4.3: cubemap render targets with per-face attachment |
 | 25 | `ed5ff58` | Phase 4.6: ShadowMaps point-shadow refactor onto cubemap RT |
+| 26 | `1fbc41f` | Phase 4.9 (partial): MoltenVK portability_subset features query |
+| 27 | `0e2ade2` | Phase 4.4 (partial): point_shadow shaders to SET()/push convention |
+| 28 | `c7b30ba` | RG16F + RGB16F formats (prerequisite for IBL refactor) |
 
 ---
 
