@@ -15,3 +15,7 @@ target_link_libraries(sonnet_scripting
 
 # sol2 generates a lot of warnings we don't own; silence them.
 target_compile_options(sonnet_scripting PRIVATE -w)
+
+sonnet_add_module_test(sonnet_scripting
+    tests/LuaScriptRuntimeTests.cpp
+)
