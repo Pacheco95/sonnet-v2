@@ -20,3 +20,5 @@ endif()
 if(SONNET_USE_VULKAN)
     target_link_libraries(sonnet_renderer_frontend PUBLIC sonnet::renderer::vulkan)
 endif()
+
+add_subdirectory(tests)
