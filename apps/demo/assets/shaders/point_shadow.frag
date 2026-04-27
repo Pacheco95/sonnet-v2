@@ -2,8 +2,17 @@
 in  vec3 vFragPos;
 out vec4 fragColor;
 
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    layout(offset = 64) vec3  uLightPos;     // offset past vertex-stage uModel (mat4 = 64 B)
+    layout(offset = 80) float uFarPlane;
+} pc;
+#define uLightPos pc.uLightPos
+#define uFarPlane pc.uFarPlane
+#else
 uniform vec3  uLightPos;
 uniform float uFarPlane;
+#endif
 
 void main() {
     // Store normalized linear distance [0,1] in both the colour attachment
