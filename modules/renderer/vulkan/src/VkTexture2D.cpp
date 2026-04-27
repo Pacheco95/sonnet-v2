@@ -6,6 +6,8 @@
 #include "VkSamplerCache.h"
 #include "VkUtils.h"
 
+#include <imgui_impl_vulkan.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -237,8 +239,27 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
 }
 
 VkTexture2D::~VkTexture2D() {
+    // Free the ImGui descriptor first — its parent pool was created with
+    // VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT for exactly this. Skip
+    // when ImGui hasn't been initialized (e.g. headless tests).
+    if (m_imguiDescriptor != VK_NULL_HANDLE) {
+        ImGui_ImplVulkan_RemoveTexture(m_imguiDescriptor);
+    }
     if (m_view  != VK_NULL_HANDLE) vkDestroyImageView(m_device.logical(), m_view, nullptr);
     if (m_image != VK_NULL_HANDLE) vmaDestroyImage(m_device.allocator(), m_image, m_alloc);
+}
+
+std::uintptr_t VkTexture2D::getImGuiTextureId() {
+    if (m_imguiDescriptor == VK_NULL_HANDLE) {
+        // ImGui_ImplVulkan_AddTexture allocates from the descriptor pool that
+        // was passed to ImGui_ImplVulkan_Init (created with FREE_DESCRIPTOR_SET
+        // in VkRendererBackend::initialize). Layout is always
+        // SHADER_READ_ONLY_OPTIMAL between passes — same as the layout we
+        // transition color targets back to at end-of-pass.
+        m_imguiDescriptor = ImGui_ImplVulkan_AddTexture(
+            m_vkSampler, m_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    return reinterpret_cast<std::uintptr_t>(m_imguiDescriptor);
 }
 
 void VkTexture2D::bind(std::uint8_t slot) const {

@@ -47,10 +47,7 @@ public:
         // through backend-specific accessors below.
         return 0u;
     }
-    [[nodiscard]] std::uintptr_t  getImGuiTextureId() override {
-        // Phase 4 builds the ImGui VkDescriptorSet lazily here.
-        return 0u;
-    }
+    [[nodiscard]] std::uintptr_t  getImGuiTextureId() override;
 
     // Backend-internal accessors.
     [[nodiscard]] VkImage     image()     const { return m_image; }
@@ -74,6 +71,11 @@ private:
     VkFormat                   m_format     = VK_FORMAT_UNDEFINED;
     std::uint32_t              m_mipLevels  = 1;
     bool                       m_isDepth    = false;
+
+    // Lazily-allocated ImGui descriptor (one per (sampler, view) pair). Cached
+    // for the lifetime of the texture; freed back to imgui_impl_vulkan's
+    // internal pool in the destructor.
+    VkDescriptorSet            m_imguiDescriptor = VK_NULL_HANDLE;
 };
 
 } // namespace sonnet::renderer::vulkan
