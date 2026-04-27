@@ -457,6 +457,7 @@ In chronological order on `main`:
 | 26 | `1fbc41f` | Phase 4.9 (partial): MoltenVK portability_subset features query |
 | 27 | `0e2ade2` | Phase 4.4 (partial): point_shadow shaders to SET()/push convention |
 | 28 | `c7b30ba` | RG16F + RGB16F formats (prerequisite for IBL refactor) |
+| 29 | `8f707cc` | Drop glReadPixels in EditorUI; use Renderer::readPixelRGBA8 |
 
 ---
 
