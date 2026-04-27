@@ -58,7 +58,7 @@ int main() {
                          DEMO_ASSETS_DIR "/shaders/point_shadow.frag")};
 
     // ── IBL — irradiance, pre-filtered specular, BRDF LUT ────────────────────
-    const IBLMaps ibl = buildIBL(renderer,
+    const IBLMaps ibl = buildIBL(renderer, backend,
         DEMO_ASSETS_DIR "/kloppenheim_06_1k.hdr",
         DEMO_ASSETS_DIR "/shaders");
 

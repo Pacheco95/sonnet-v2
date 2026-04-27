@@ -2,7 +2,7 @@
 in  vec3 vLocalPos;
 out vec4 fragColor;
 
-uniform sampler2D uEquirectMap;
+layout(SET(1,0)) uniform sampler2D uEquirectMap;
 
 const vec2 INV_ATAN = vec2(0.1591, 0.3183); // (1/2π, 1/π)
 

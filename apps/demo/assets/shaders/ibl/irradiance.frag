@@ -2,7 +2,7 @@
 in  vec3 vLocalPos;
 out vec4 fragColor;
 
-uniform samplerCube uEnvMap;
+layout(SET(1,0)) uniform samplerCube uEnvMap;
 
 const float PI = 3.14159265359;
 

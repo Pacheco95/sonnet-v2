@@ -1,13 +1,14 @@
-// IBL.h — Image-Based Lighting pre-computation (startup, raw OpenGL).
+// IBL.h — Image-Based Lighting pre-computation through the engine.
 //
-// Loads an equirectangular HDR map and bakes three GPU resources:
-//   • irradianceCube  — 32×32  diffuse irradiance cubemap
+// Loads an equirectangular HDR map and bakes four GPU resources, all owned
+// by the frontend Renderer (no raw GL):
+//   • equirect       — 2D HDR equirectangular (skybox source)
+//   • irradianceCube — 32×32  diffuse irradiance cubemap
 //   • prefilteredCube — 128×128 specular pre-filtered cubemap (5 mip levels)
-//   • brdfLUT         — 512×512 GGX split-sum BRDF look-up table (RG16F)
+//   • brdfLUT        — 512×512 GGX split-sum BRDF look-up table (RG16F)
 //
-// The equirectangular texture is also retained for the skybox pass.
-// All textures are registered with the engine Renderer so they can be
-// used as normal GPUTextureHandles in material instances.
+// All four are returned as `core::GPUTextureHandle`s for use in material
+// instances (see PostProcess::buildMaterials).
 //
 // Usage:
 //   IBLMaps ibl = buildIBL(renderer, hdrPath, shaderDir);
@@ -18,104 +19,41 @@
 
 #pragma once
 
-#include <sonnet/api/render/ITexture.h>
+#include <sonnet/api/render/CPUMesh.h>
+#include <sonnet/api/render/FrameContext.h>
+#include <sonnet/api/render/Material.h>
+#include <sonnet/api/render/RenderItem.h>
+#include <sonnet/api/render/VertexLayout.h>
+#include <sonnet/primitives/MeshPrimitives.h>
 #include <sonnet/renderer/frontend/Renderer.h>
 
-#include <glad/glad.h>
 #include <stb_image.h>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
 
-#include <array>
 #include <filesystem>
 #include <fstream>
-#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-
-// ── ITexture wrappers for raw GL textures ─────────────────────────────────────
-
-class RawGLTexture2D final : public sonnet::api::render::ITexture {
-public:
-    explicit RawGLTexture2D(GLuint id) : m_id(id) {
-        m_texDesc.format = sonnet::api::render::TextureFormat::RGBA16F;
-        m_texDesc.type   = sonnet::api::render::TextureType::Texture2D;
-    }
-    ~RawGLTexture2D() override { /* owned externally by IBLMaps */ }
-
-    void bind(std::uint8_t slot)   const override {
-        glActiveTexture(GL_TEXTURE0 + slot);
-        glBindTexture(GL_TEXTURE_2D, m_id);
-    }
-    void unbind(std::uint8_t slot) const override {
-        glActiveTexture(GL_TEXTURE0 + slot);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
-
-    [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return m_texDesc; }
-    [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return m_sampDesc; }
-    [[nodiscard]] unsigned getNativeHandle()                            const override { return m_id; }
-    [[nodiscard]] std::uintptr_t getImGuiTextureId()                          override { return static_cast<std::uintptr_t>(m_id); }
-
-private:
-    GLuint                               m_id;
-    sonnet::api::render::TextureDesc     m_texDesc{};
-    sonnet::api::render::SamplerDesc     m_sampDesc{};
-};
-
-class RawGLCubeMap final : public sonnet::api::render::ITexture {
-public:
-    explicit RawGLCubeMap(GLuint id) : m_id(id) {
-        m_texDesc.format = sonnet::api::render::TextureFormat::RGBA16F;
-        m_texDesc.type   = sonnet::api::render::TextureType::CubeMap;
-    }
-    ~RawGLCubeMap() override { /* owned externally by IBLMaps */ }
-
-    void bind(std::uint8_t slot)   const override {
-        glActiveTexture(GL_TEXTURE0 + slot);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, m_id);
-    }
-    void unbind(std::uint8_t slot) const override {
-        glActiveTexture(GL_TEXTURE0 + slot);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-    }
-
-    [[nodiscard]] const sonnet::api::render::TextureDesc &textureDesc() const override { return m_texDesc; }
-    [[nodiscard]] const sonnet::api::render::SamplerDesc &samplerDesc() const override { return m_sampDesc; }
-    [[nodiscard]] unsigned getNativeHandle()                            const override { return m_id; }
-    [[nodiscard]] std::uintptr_t getImGuiTextureId()                          override { return static_cast<std::uintptr_t>(m_id); }
-
-private:
-    GLuint                               m_id;
-    sonnet::api::render::TextureDesc     m_texDesc{};
-    sonnet::api::render::SamplerDesc     m_sampDesc{};
-};
+#include <vector>
 
 // ── Result ────────────────────────────────────────────────────────────────────
 
 struct IBLMaps {
-    // Raw GL IDs (owned — call destroyIBL() when done, or let the process exit).
-    GLuint equirectTex     = 0; // 2D RGB16F — equirectangular HDR for skybox
-    GLuint irradianceCube  = 0; // 32×32 RGB16F cubemap — diffuse irradiance
-    GLuint prefilteredCube = 0; // 128×128 RGB16F cubemap (mipped) — specular
-    GLuint brdfLUT         = 0; // 512×512 RG16F 2D — split-sum BRDF LUT
-    int    prefilteredLODs = 5; // mip levels generated in prefilteredCube
-
-    // Engine handles (registered with Renderer::registerRawTexture).
     sonnet::core::GPUTextureHandle equirectHandle{};
     sonnet::core::GPUTextureHandle irradianceHandle{};
     sonnet::core::GPUTextureHandle prefilteredHandle{};
     sonnet::core::GPUTextureHandle brdfLUTHandle{};
+    int                            prefilteredLODs = 5;
 };
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 namespace ibl_detail {
 
-static std::string loadFile(const std::filesystem::path &p) {
+inline std::string loadFile(const std::filesystem::path &p) {
     std::ifstream f{p};
     if (!f) throw std::runtime_error("IBL: cannot open '" + p.string() + "'");
     std::ostringstream ss;
@@ -123,73 +61,17 @@ static std::string loadFile(const std::filesystem::path &p) {
     return ss.str();
 }
 
-static GLuint compileShader(GLenum type, const std::string &src) {
-    GLuint s = glCreateShader(type);
-    const char *csrc = src.c_str();
-    glShaderSource(s, 1, &csrc, nullptr);
-    glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        glGetShaderInfoLog(s, sizeof(log), nullptr, log);
-        glDeleteShader(s);
-        throw std::runtime_error(std::string("IBL shader compile error:\n") + log);
-    }
-    return s;
+// 90° fov perspective for cubemap face rendering. Same on both backends —
+// the engine's projection helper handles clip-space Y / NDC Z corrections
+// against the active backend's traits.
+inline glm::mat4 captureProj() {
+    return sonnet::core::projection::perspective(
+        glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
 }
 
-static GLuint linkProgram(GLuint vert, GLuint frag) {
-    GLuint prog = glCreateProgram();
-    glAttachShader(prog, vert);
-    glAttachShader(prog, frag);
-    glLinkProgram(prog);
-    GLint ok = 0;
-    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
-        glDeleteProgram(prog);
-        throw std::runtime_error(std::string("IBL program link error:\n") + log);
-    }
-    glDeleteShader(vert);
-    glDeleteShader(frag);
-    return prog;
-}
-
-static GLuint buildProgram(const std::filesystem::path &vertPath,
-                            const std::filesystem::path &fragPath) {
-    auto vs = compileShader(GL_VERTEX_SHADER,   loadFile(vertPath));
-    auto fs = compileShader(GL_FRAGMENT_SHADER, loadFile(fragPath));
-    return linkProgram(vs, fs);
-}
-
-// Unit cube positions (36 vertices, no indices).
-static const float CUBE_VERTS[] = {
-    -1,-1,-1,  1,-1,-1,  1, 1,-1,  1, 1,-1, -1, 1,-1, -1,-1,-1, // -Z
-    -1,-1, 1,  1,-1, 1,  1, 1, 1,  1, 1, 1, -1, 1, 1, -1,-1, 1, // +Z
-    -1, 1, 1, -1, 1,-1, -1,-1,-1, -1,-1,-1, -1,-1, 1, -1, 1, 1, // -X
-     1, 1, 1,  1, 1,-1,  1,-1,-1,  1,-1,-1,  1,-1, 1,  1, 1, 1, // +X
-    -1,-1,-1,  1,-1,-1,  1,-1, 1,  1,-1, 1, -1,-1, 1, -1,-1,-1, // -Y
-    -1, 1,-1,  1, 1,-1,  1, 1, 1,  1, 1, 1, -1, 1, 1, -1, 1,-1  // +Y
-};
-
-static GLuint makeCubeVAO() {
-    GLuint vao, vbo;
-    glGenVertexArrays(1, &vao);
-    glGenBuffers(1, &vbo);
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(CUBE_VERTS), CUBE_VERTS, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-    glBindVertexArray(0);
-    glDeleteBuffers(1, &vbo); // vao holds a reference
-    return vao;
-}
-
-// 6 capture views for a cubemap rendered from the origin.
-static std::array<glm::mat4, 6> captureViews() {
+// 6 capture views from the origin, one per cubemap face. Order matches
+// CubeMapFaces / GL_TEXTURE_CUBE_MAP_POSITIVE_X+i: +X, -X, +Y, -Y, +Z, -Z.
+inline std::array<glm::mat4, 6> captureViews() {
     return {
         glm::lookAt(glm::vec3{0}, { 1, 0, 0}, {0,-1, 0}),
         glm::lookAt(glm::vec3{0}, {-1, 0, 0}, {0,-1, 0}),
@@ -200,259 +82,278 @@ static std::array<glm::mat4, 6> captureViews() {
     };
 }
 
-static const glm::mat4 CAPTURE_PROJ =
-    glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 10.0f);
+// Render a single cubemap face: bind the RT face, set viewport, clear, draw.
+// All begin/end-frame bookkeeping happens once per face — wasteful on Vulkan
+// (each face presents the swapchain) but functionally correct for a
+// startup-time precompute. A future Phase 8 could add a one-shot path.
+inline void renderFace(sonnet::renderer::frontend::Renderer  &renderer,
+                       sonnet::api::render::IRendererBackend &backend,
+                       sonnet::core::RenderTargetHandle      rt,
+                       std::uint32_t                          face,
+                       std::uint32_t                          mipLevel,
+                       std::uint32_t                          mipSize,
+                       const glm::mat4                       &view,
+                       const glm::mat4                       &proj,
+                       std::vector<sonnet::api::render::RenderItem> &queue) {
+    renderer.selectCubemapFace(rt, face, mipLevel);
+    renderer.bindRenderTarget(rt);
+    backend.setViewport(mipSize, mipSize);
+    backend.setDepthTest(true);
+    backend.setDepthWrite(true);
+    backend.clear({
+        .colors = {{0, glm::vec4{0.0f, 0.0f, 0.0f, 1.0f}}},
+        .depth  = 1.0f,
+    });
 
-static void renderCubeToFaces(GLuint prog, GLuint fbo, GLuint cubeVAO,
-                               GLuint cubeTex, int size,
-                               int mipLevel = 0) {
-    glUseProgram(prog);
-    glUniformMatrix4fv(glGetUniformLocation(prog, "uProjection"), 1, GL_FALSE,
-                       glm::value_ptr(CAPTURE_PROJ));
-
-    const auto views = captureViews();
-
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glViewport(0, 0, size, size);
-
-    for (int face = 0; face < 6; ++face) {
-        glUniformMatrix4fv(glGetUniformLocation(prog, "uView"), 1, GL_FALSE,
-                           glm::value_ptr(views[face]));
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
-                               cubeTex, mipLevel);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glBindVertexArray(cubeVAO);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    sonnet::api::render::FrameContext ctx{
+        .viewMatrix       = view,
+        .projectionMatrix = proj,
+        .viewPosition     = glm::vec3{0.0f},
+        .viewportWidth    = mipSize,
+        .viewportHeight   = mipSize,
+        .deltaTime        = 0.0f,
+    };
+    renderer.beginFrame();
+    renderer.render(ctx, queue);
+    renderer.endFrame();
 }
 
 } // namespace ibl_detail
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-inline IBLMaps buildIBL(sonnet::renderer::frontend::Renderer &renderer,
-                         const std::filesystem::path &hdrPath,
-                         const std::filesystem::path &shaderDir) {
+inline IBLMaps buildIBL(sonnet::renderer::frontend::Renderer  &renderer,
+                         sonnet::api::render::IRendererBackend &backend,
+                         const std::filesystem::path           &hdrPath,
+                         const std::filesystem::path           &shaderDir) {
+    using namespace sonnet::api::render;
     using namespace ibl_detail;
 
-    // ── Save GL state ─────────────────────────────────────────────────────────
-    GLint prevFBO      = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
-    GLint prevViewport[4]; glGetIntegerv(GL_VIEWPORT, prevViewport);
-    GLboolean prevDepth = glIsEnabled(GL_DEPTH_TEST);
+    constexpr int ENV_SIZE       = 512;
+    constexpr int IRRAD_SIZE     = 32;
+    constexpr int PREFILTER_SIZE = 128;
+    constexpr int LUT_SIZE       = 512;
+    constexpr int NUM_MIPS       = 5;
 
-    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
-    glEnable(GL_DEPTH_TEST);
+    const glm::mat4 PROJ  = captureProj();
+    const auto      VIEWS = captureViews();
+    (void)backend; // backend reference is consumed inside renderFace().
 
     // ── Load HDR equirectangular image ────────────────────────────────────────
+    // Force 4 channels so the byte buffer maps cleanly to RGBA32F. The engine
+    // does not natively own a float→half conversion, so we accept the 2× memory
+    // cost for the equirect (transient: only sampled once during the env-cube
+    // capture). 4096×2048 RGBA32F is ~128 MB but freed shortly after.
     stbi_set_flip_vertically_on_load(true);
-    int w, h, ch;
-    float *data = stbi_loadf(hdrPath.string().c_str(), &w, &h, &ch, 0);
-    if (!data) throw std::runtime_error("IBL: failed to load HDR '" + hdrPath.string() + "'");
+    int w = 0, h = 0, ch = 0;
+    float *raw = stbi_loadf(hdrPath.string().c_str(), &w, &h, &ch, 4);
+    if (!raw) throw std::runtime_error("IBL: failed to load HDR '" + hdrPath.string() + "'");
+    const std::size_t equirectFloats = static_cast<std::size_t>(w) * h * 4;
+    const std::size_t equirectBytes  = equirectFloats * sizeof(float);
 
-    GLuint equirectTex;
-    glGenTextures(1, &equirectTex);
-    glBindTexture(GL_TEXTURE_2D, equirectTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0, GL_RGB, GL_FLOAT, data);
-    stbi_image_free(data);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    std::vector<std::byte> equirectBytesVec(equirectBytes);
+    std::memcpy(equirectBytesVec.data(), raw, equirectBytes);
+    stbi_image_free(raw);
 
-    // ── Shared FBO + RBO for capture ──────────────────────────────────────────
-    GLuint captureFBO, captureRBO;
-    glGenFramebuffers(1, &captureFBO);
-    glGenRenderbuffers(1, &captureRBO);
-
-    GLuint cubeVAO = makeCubeVAO();
-
-    // ── Step 1: env cubemap (equirect → cubemap, 512×512) ────────────────────
-    constexpr int ENV_SIZE = 512;
-    GLuint envCube;
-    glGenTextures(1, &envCube);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
-    for (int f = 0; f < 6; ++f)
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0,
-                     GL_RGB16F, ENV_SIZE, ENV_SIZE, 0, GL_RGB, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
-    glBindRenderbuffer(GL_RENDERBUFFER, captureRBO);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, ENV_SIZE, ENV_SIZE);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, captureRBO);
-
-    {
-        GLuint prog = buildProgram(shaderDir / "ibl/capture.vert",
-                                   shaderDir / "ibl/equirect_to_cube.frag");
-        glUseProgram(prog);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, equirectTex);
-        glUniform1i(glGetUniformLocation(prog, "uEquirectMap"), 0);
-        renderCubeToFaces(prog, captureFBO, cubeVAO, envCube, ENV_SIZE);
-        glDeleteProgram(prog);
-    }
-
-    glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
-    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
-
-    // ── Step 2: irradiance cubemap (32×32) ────────────────────────────────────
-    constexpr int IRRAD_SIZE = 32;
-    GLuint irradianceCube;
-    glGenTextures(1, &irradianceCube);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, irradianceCube);
-    for (int f = 0; f < 6; ++f)
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0,
-                     GL_RGB16F, IRRAD_SIZE, IRRAD_SIZE, 0, GL_RGB, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, IRRAD_SIZE, IRRAD_SIZE);
-
-    {
-        GLuint prog = buildProgram(shaderDir / "ibl/capture.vert",
-                                   shaderDir / "ibl/irradiance.frag");
-        glUseProgram(prog);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
-        glUniform1i(glGetUniformLocation(prog, "uEnvMap"), 0);
-        renderCubeToFaces(prog, captureFBO, cubeVAO, irradianceCube, IRRAD_SIZE);
-        glDeleteProgram(prog);
-    }
-
-    // ── Step 3: pre-filtered specular cubemap (128×128, 5 mip levels) ─────────
-    constexpr int   PREFILTER_SIZE = 128;
-    constexpr int   NUM_MIPS       = 5;
-    GLuint prefilteredCube;
-    glGenTextures(1, &prefilteredCube);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, prefilteredCube);
-    for (int f = 0; f < 6; ++f)
-        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0,
-                     GL_RGB16F, PREFILTER_SIZE, PREFILTER_SIZE, 0, GL_RGB, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glGenerateMipmap(GL_TEXTURE_CUBE_MAP); // allocate mip storage
-
-    {
-        GLuint prog = buildProgram(shaderDir / "ibl/capture.vert",
-                                   shaderDir / "ibl/prefilter.frag");
-        glUseProgram(prog);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
-        glUniform1i(glGetUniformLocation(prog, "uEnvMap"), 0);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
-        const auto views = captureViews();
-        glUniformMatrix4fv(glGetUniformLocation(prog, "uProjection"), 1, GL_FALSE,
-                           glm::value_ptr(CAPTURE_PROJ));
-
-        for (int mip = 0; mip < NUM_MIPS; ++mip) {
-            const int mipSize = static_cast<int>(PREFILTER_SIZE * std::pow(0.5, mip));
-            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, mipSize, mipSize);
-            glViewport(0, 0, mipSize, mipSize);
-
-            const float roughness = static_cast<float>(mip) / static_cast<float>(NUM_MIPS - 1);
-            glUniform1f(glGetUniformLocation(prog, "uRoughness"), roughness);
-
-            for (int face = 0; face < 6; ++face) {
-                glUniformMatrix4fv(glGetUniformLocation(prog, "uView"), 1, GL_FALSE,
-                                   glm::value_ptr(views[face]));
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                       GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
-                                       prefilteredCube, mip);
-                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-                glBindVertexArray(cubeVAO);
-                glDrawArrays(GL_TRIANGLES, 0, 36);
-            }
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glDeleteProgram(prog);
-    }
-
-    // ── Step 4: BRDF LUT (512×512 RG16F) ────────────────────────────────────
-    constexpr int LUT_SIZE = 512;
-    GLuint brdfLUT;
-    glGenTextures(1, &brdfLUT);
-    glBindTexture(GL_TEXTURE_2D, brdfLUT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, LUT_SIZE, LUT_SIZE, 0, GL_RG, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // Fullscreen quad for BRDF LUT.
-    const float quadVerts[] = {
-        -1,-1,0,  0,0,
-         1,-1,0,  1,0,
-         1, 1,0,  1,1,
-        -1,-1,0,  0,0,
-         1, 1,0,  1,1,
-        -1, 1,0,  0,1,
+    CPUTextureBuffer equirectData{
+        .width    = static_cast<std::uint32_t>(w),
+        .height   = static_cast<std::uint32_t>(h),
+        .channels = 4,
+        .texels   = sonnet::core::Texels(std::move(equirectBytesVec)),
     };
-    GLuint quadVAO, quadVBO;
-    glGenVertexArrays(1, &quadVAO);
-    glGenBuffers(1, &quadVBO);
-    glBindVertexArray(quadVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
-    glEnableVertexAttribArray(2); // layout(location=2) = texcoord
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
-                          reinterpret_cast<void *>(3 * sizeof(float)));
 
+    const auto equirectHandle = renderer.createTexture(
+        TextureDesc{
+            .size       = {static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h)},
+            .format     = TextureFormat::RGBA32F,
+            .type       = TextureType::Texture2D,
+            .usageFlags = Sampled,
+            .colorSpace = ColorSpace::Linear,
+            .useMipmaps = false,
+        },
+        SamplerDesc{
+            .minFilter = MinFilter::Linear,
+            .magFilter = MagFilter::Linear,
+            .wrapS     = TextureWrap::ClampToEdge,
+            .wrapT     = TextureWrap::ClampToEdge,
+        },
+        equirectData);
+
+    // ── Cube + quad meshes + capture material common state ────────────────────
+    const auto cubeHandle = renderer.createMesh(
+        sonnet::primitives::makeBox(glm::vec3{2.0f}));  // [-1,+1]
+    const auto quadHandle = renderer.createMesh(
+        sonnet::primitives::makeQuad(glm::vec2{2.0f})); // [-1,+1] fullscreen
+
+    // ── Step 1: env cubemap (equirect → cubemap) ──────────────────────────────
+    const auto envShader = renderer.createShader(
+        loadFile(shaderDir / "ibl/capture.vert"),
+        loadFile(shaderDir / "ibl/equirect_to_cube.frag"));
+    const auto envMatTmpl = renderer.createMaterial(MaterialTemplate{
+        .shaderHandle = envShader,
+        .renderState  = {},
+    });
+    MaterialInstance envMat{envMatTmpl};
+    envMat.addTexture("uEquirectMap", equirectHandle);
+
+    const auto envCubeRT = renderer.createRenderTarget(RenderTargetDesc{
+        .width     = ENV_SIZE,
+        .height    = ENV_SIZE,
+        .colors    = {{TextureFormat::RGBA16F,
+                       SamplerDesc{.minFilter = MinFilter::LinearMipmapLinear,
+                                   .magFilter = MagFilter::Linear,
+                                   .wrapS     = TextureWrap::ClampToEdge,
+                                   .wrapT     = TextureWrap::ClampToEdge,
+                                   .wrapR     = TextureWrap::ClampToEdge}}},
+        .depth     = RenderBufferDesc{},
+        .isCubemap = true,
+        .mipLevels = 1,
+    });
     {
-        GLuint prog = buildProgram(shaderDir / "ibl/brdf_lut.vert",
-                                   shaderDir / "ibl/brdf_lut.frag");
-        glBindFramebuffer(GL_FRAMEBUFFER, captureFBO);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, LUT_SIZE, LUT_SIZE);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, brdfLUT, 0);
-        glViewport(0, 0, LUT_SIZE, LUT_SIZE);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glUseProgram(prog);
-        glBindVertexArray(quadVAO);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glDeleteProgram(prog);
+        std::vector<RenderItem> q{{
+            .mesh        = cubeHandle,
+            .material    = envMat,
+            .modelMatrix = glm::mat4{1.0f},
+        }};
+        for (std::uint32_t face = 0; face < 6; ++face) {
+            renderFace(renderer, backend, envCubeRT, face, 0, ENV_SIZE,
+                        VIEWS[face], PROJ, q);
+        }
     }
+    const auto envCubeHandle = renderer.colorTextureHandle(envCubeRT, 0);
 
-    glDeleteVertexArrays(1, &quadVAO);
-    glDeleteBuffers(1, &quadVBO);
-    glDeleteVertexArrays(1, &cubeVAO);
-    glDeleteFramebuffers(1, &captureFBO);
-    glDeleteRenderbuffers(1, &captureRBO);
+    // ── Step 2: irradiance cubemap ────────────────────────────────────────────
+    const auto irradShader = renderer.createShader(
+        loadFile(shaderDir / "ibl/capture.vert"),
+        loadFile(shaderDir / "ibl/irradiance.frag"));
+    const auto irradMatTmpl = renderer.createMaterial(MaterialTemplate{
+        .shaderHandle = irradShader,
+        .renderState  = {},
+    });
+    MaterialInstance irradMat{irradMatTmpl};
+    irradMat.addTexture("uEnvMap", envCubeHandle);
 
-    // ── Restore GL state ──────────────────────────────────────────────────────
-    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
-    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
-    if (!prevDepth) glDisable(GL_DEPTH_TEST);
+    const auto irradCubeRT = renderer.createRenderTarget(RenderTargetDesc{
+        .width     = IRRAD_SIZE,
+        .height    = IRRAD_SIZE,
+        .colors    = {{TextureFormat::RGBA16F,
+                       SamplerDesc{.minFilter = MinFilter::Linear,
+                                   .magFilter = MagFilter::Linear,
+                                   .wrapS     = TextureWrap::ClampToEdge,
+                                   .wrapT     = TextureWrap::ClampToEdge,
+                                   .wrapR     = TextureWrap::ClampToEdge}}},
+        .depth     = RenderBufferDesc{},
+        .isCubemap = true,
+        .mipLevels = 1,
+    });
+    {
+        std::vector<RenderItem> q{{
+            .mesh        = cubeHandle,
+            .material    = irradMat,
+            .modelMatrix = glm::mat4{1.0f},
+        }};
+        for (std::uint32_t face = 0; face < 6; ++face) {
+            renderFace(renderer, backend, irradCubeRT, face, 0, IRRAD_SIZE,
+                        VIEWS[face], PROJ, q);
+        }
+    }
+    const auto irradianceHandle = renderer.colorTextureHandle(irradCubeRT, 0);
 
-    // ── Register with engine renderer ─────────────────────────────────────────
-    IBLMaps maps;
-    maps.equirectTex     = equirectTex;
-    maps.irradianceCube  = irradianceCube;
-    maps.prefilteredCube = prefilteredCube;
-    maps.brdfLUT         = brdfLUT;
-    maps.prefilteredLODs = NUM_MIPS;
+    // ── Step 3: prefiltered specular cubemap (5 mip levels) ───────────────────
+    const auto preShader = renderer.createShader(
+        loadFile(shaderDir / "ibl/capture.vert"),
+        loadFile(shaderDir / "ibl/prefilter.frag"));
+    const auto preMatTmpl = renderer.createMaterial(MaterialTemplate{
+        .shaderHandle = preShader,
+        .renderState  = {},
+    });
+    const auto prefilterRT = renderer.createRenderTarget(RenderTargetDesc{
+        .width     = PREFILTER_SIZE,
+        .height    = PREFILTER_SIZE,
+        .colors    = {{TextureFormat::RGBA16F,
+                       SamplerDesc{.minFilter = MinFilter::LinearMipmapLinear,
+                                   .magFilter = MagFilter::Linear,
+                                   .wrapS     = TextureWrap::ClampToEdge,
+                                   .wrapT     = TextureWrap::ClampToEdge,
+                                   .wrapR     = TextureWrap::ClampToEdge}}},
+        .depth     = RenderBufferDesc{},
+        .isCubemap = true,
+        .mipLevels = NUM_MIPS,
+    });
+    for (int mip = 0; mip < NUM_MIPS; ++mip) {
+        const std::uint32_t mipSize = std::max(1u, static_cast<std::uint32_t>(PREFILTER_SIZE) >> mip);
+        const float roughness       = static_cast<float>(mip) / static_cast<float>(NUM_MIPS - 1);
 
-    maps.equirectHandle  = renderer.registerRawTexture(std::make_unique<RawGLTexture2D>(equirectTex));
-    maps.irradianceHandle= renderer.registerRawTexture(std::make_unique<RawGLCubeMap>(irradianceCube));
-    maps.prefilteredHandle=renderer.registerRawTexture(std::make_unique<RawGLCubeMap>(prefilteredCube));
-    maps.brdfLUTHandle   = renderer.registerRawTexture(std::make_unique<RawGLTexture2D>(brdfLUT));
+        MaterialInstance preMat{preMatTmpl};
+        preMat.addTexture("uEnvMap", envCubeHandle);
+        preMat.set("uRoughness", roughness);
 
-    return maps;
+        std::vector<RenderItem> q{{
+            .mesh        = cubeHandle,
+            .material    = preMat,
+            .modelMatrix = glm::mat4{1.0f},
+        }};
+        for (std::uint32_t face = 0; face < 6; ++face) {
+            renderFace(renderer, backend, prefilterRT, face,
+                        static_cast<std::uint32_t>(mip), mipSize,
+                        VIEWS[face], PROJ, q);
+        }
+    }
+    const auto prefilteredHandle = renderer.colorTextureHandle(prefilterRT, 0);
+
+    // ── Step 4: BRDF LUT (single 2D pass) ─────────────────────────────────────
+    const auto lutShader = renderer.createShader(
+        loadFile(shaderDir / "ibl/brdf_lut.vert"),
+        loadFile(shaderDir / "ibl/brdf_lut.frag"));
+    const auto lutMatTmpl = renderer.createMaterial(MaterialTemplate{
+        .shaderHandle = lutShader,
+        .renderState  = {},
+    });
+    MaterialInstance lutMat{lutMatTmpl};
+
+    const auto lutRT = renderer.createRenderTarget(RenderTargetDesc{
+        .width  = LUT_SIZE,
+        .height = LUT_SIZE,
+        .colors = {{TextureFormat::RG16F,
+                    SamplerDesc{.minFilter = MinFilter::Linear,
+                                .magFilter = MagFilter::Linear,
+                                .wrapS     = TextureWrap::ClampToEdge,
+                                .wrapT     = TextureWrap::ClampToEdge}}},
+        .depth  = RenderBufferDesc{},
+    });
+    {
+        std::vector<RenderItem> q{{
+            .mesh        = quadHandle,
+            .material    = lutMat,
+            .modelMatrix = glm::mat4{1.0f},
+        }};
+        renderer.bindRenderTarget(lutRT);
+        backend.setViewport(LUT_SIZE, LUT_SIZE);
+        backend.setDepthTest(false);
+        backend.setDepthWrite(false);
+        backend.clear({
+            .colors = {{0, glm::vec4{0.0f, 0.0f, 0.0f, 1.0f}}},
+            .depth  = 1.0f,
+        });
+        FrameContext ctx{
+            .viewMatrix       = glm::mat4{1.0f},
+            .projectionMatrix = glm::mat4{1.0f},
+            .viewPosition     = glm::vec3{0.0f},
+            .viewportWidth    = LUT_SIZE,
+            .viewportHeight   = LUT_SIZE,
+            .deltaTime        = 0.0f,
+        };
+        renderer.beginFrame();
+        renderer.render(ctx, q);
+        renderer.endFrame();
+    }
+    const auto brdfLUTHandle = renderer.colorTextureHandle(lutRT, 0);
+
+    return IBLMaps{
+        .equirectHandle    = equirectHandle,
+        .irradianceHandle  = irradianceHandle,
+        .prefilteredHandle = prefilteredHandle,
+        .brdfLUTHandle     = brdfLUTHandle,
+        .prefilteredLODs   = NUM_MIPS,
+    };
 }

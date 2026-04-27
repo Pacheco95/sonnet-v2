@@ -2,8 +2,16 @@
 in  vec3 vLocalPos;
 out vec4 fragColor;
 
-uniform samplerCube uEnvMap;
-uniform float       uRoughness;
+layout(SET(1,0)) uniform samplerCube uEnvMap;
+
+#ifdef VULKAN
+layout(push_constant) uniform Push {
+    layout(offset = 0) float uRoughness;
+} pc;
+#define uRoughness pc.uRoughness
+#else
+uniform float uRoughness;
+#endif
 
 const float PI = 3.14159265359;
 
