@@ -1,3 +1,10 @@
+// VK_KHR_portability_subset is a beta-tagged provisional extension; the Vulkan
+// loader hides it by default. Define VK_ENABLE_BETA_EXTENSIONS BEFORE the
+// first vulkan.h include in this TU (which happens transitively via
+// vk_mem_alloc.h) so VkPhysicalDevicePortabilitySubsetFeaturesKHR's struct AND
+// the matching VK_STRUCTURE_TYPE_* enum are visible.
+#define VK_ENABLE_BETA_EXTENSIONS
+
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
@@ -120,6 +127,35 @@ void Device::pickPhysicalDevice(Instance &instance, VkSurfaceKHR surface) {
     if (hasDeviceExtension(m_physical, "VK_KHR_portability_subset")) {
         m_portabilitySubsetEnabled = true;
         spdlog::info("[vulkan] VK_KHR_portability_subset present; enabling (MoltenVK/portability path)");
+
+        // Query the subset features so we can warn early if MoltenVK lacks
+        // anything Sonnet relies on. We don't fail hard yet — most features
+        // are graceful (the engine just won't use them) — but missing
+        // mutableComparisonSamplers would break sampler2DShadow (CSM PCF) and
+        // missing imageViewFormatReinterpretation would break the sRGB/UNORM
+        // swapchain mutability pattern used for ImGui.
+        VkPhysicalDevicePortabilitySubsetFeaturesKHR portFeats{};
+        portFeats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR;
+        VkPhysicalDeviceFeatures2 feats2{};
+        feats2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        feats2.pNext = &portFeats;
+        vkGetPhysicalDeviceFeatures2(m_physical, &feats2);
+
+        if (!portFeats.mutableComparisonSamplers) {
+            spdlog::warn("[vulkan] portability_subset: mutableComparisonSamplers=FALSE "
+                         "— sampler2DShadow (CSM PCF) may be limited");
+        }
+        if (!portFeats.imageViewFormatReinterpretation) {
+            spdlog::warn("[vulkan] portability_subset: imageViewFormatReinterpretation=FALSE "
+                         "— sRGB/UNORM swapchain view mutability may not work");
+        }
+        spdlog::info("[vulkan] portability_subset features: "
+                     "mutableComparisonSamplers={} imageViewFormatReinterpretation={} "
+                     "samplerMipLodBias={} events={}",
+                     portFeats.mutableComparisonSamplers != 0,
+                     portFeats.imageViewFormatReinterpretation != 0,
+                     portFeats.samplerMipLodBias != 0,
+                     portFeats.events != 0);
     }
 }
 

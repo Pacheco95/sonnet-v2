@@ -87,11 +87,12 @@ void VkRendererBackend::initialize() {
     const auto &win = glfwWindow(m_window);
 
     // 1. Instance (w/ portability on macOS, debug-utils in debug builds).
-    const bool enableValidation =
+    // Debug builds force validation on; Release builds respect the option so
+    // tests/CI can enable it explicitly via BackendCreateOptions.
 #if !defined(NDEBUG)
-        true || m_opts.enableValidation;
+    const bool enableValidation = true;
 #else
-        m_opts.enableValidation;
+    const bool enableValidation = m_opts.enableValidation;
 #endif
     m_instance = std::make_unique<Instance>(win.requiredVulkanInstanceExtensions(),
                                             enableValidation);
