@@ -311,39 +311,26 @@ Trivial shaders that required no changes: `tonemap.vert`, `fxaa.vert`, `ssao.ver
 
 Estimates are "focused hours of agent work" — roughly 1/3 of wall-clock when interleaved with validation checks and rebuilds.
 
-### 4.1 `bindRenderTarget` — deferred render-pass model (BLOCKER)
+### 4.1 `bindRenderTarget` — deferred render-pass model — DONE (commit b2eb106)
 
-**Status:** throws `SN_VK_TODO`.
+Implemented per the plan: `bindRenderTarget` / `bindDefaultRenderTarget` queue
+the target as `m_pending`, `clear()` folds into the pending clear values, and
+`ensurePassActive()` records `vkCmdBeginRenderPass` lazily on the first
+`drawIndexed` or `renderImGui()` call. `endFrame` defensively folds to the
+default RT if the user didn't bind it. Pipeline-cache key already includes
+`renderPassCompatHash`. Subpass dependencies on `VkRenderTarget` cover the
+read-after-write case for sampled-from-color attachments.
 
-**Impact:** This is the single biggest unimplemented engine method. The OpenGL demo routes every pass through `m_renderer.bindRenderTarget(handle)` — gbuffer RT, SSAO RT, bloom chain, compose RT, picking RT, plus the default swapchain RT for ImGui. Under Vulkan, only the default swapchain RT works (because `beginFrame` auto-begins the default render pass).
+### 4.2 Cubemap texture support — DONE (commit 4dc13fa)
 
-**Design:** the plan document specifies a "deferred-pass" model:
-
-1. `bindRenderTarget(rt)` does NOT immediately record anything. It stores the target + pending clear values as "pending pass".
-2. `clear(opts)` folds into the pending clear values.
-3. The next "committing" call (`drawIndexed`, or a subsequent `bindRenderTarget`) ends any currently active pass with `vkCmdEndRenderPass`, then begins the pending pass with `vkCmdBeginRenderPass` using the merged clear values in `VkRenderPassBeginInfo.pClearValues`.
-
-Additional bookkeeping on the backend:
-
-- Track `m_activeRenderPass` (already present; currently only set once at beginFrame) and update it when committing.
-- Track the current render pass's attachment formats / sample counts so the pipeline cache's `renderPassCompatHash` key changes when the user switches RTs.
-- Insert `VkImageMemoryBarrier` transitions between passes when a color attachment produced by pass N will be sampled by pass N+1. `VkRenderTarget`'s subpass dependencies already cover the common case (external -> subpass and subpass -> external).
-
-**Effort:** medium — ~4–6 hours.
-
-### 4.2 Cubemap texture support
-
-**Status:** `VkTextureFactory::create(CubeMapFaces)` throws `SN_VK_TODO`.
-
-**Impact:** Blocks any setup that builds a cubemap (skybox, IBL precompute). Also blocks `VkRenderTarget` cubemap attachments (Section 4.3).
-
-**Design:**
-
-1. Extend `VkTexture2D`'s CPU-data constructor to accept `TextureType::CubeMap`. Create the `VkImage` with `VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT`, `arrayLayers = 6`. Run the staging copy once per face (six `vkCmdCopyBufferToImage` with `imageSubresource.baseArrayLayer = face`). Create the `VkImageView` with `viewType = VK_IMAGE_VIEW_TYPE_CUBE`.
-2. Do the same for `GlTextureFactory` (currently also throws).
-3. Mipmap generation on cubemaps: six-times blit loop over faces, or `glGenerateMipmap(GL_TEXTURE_CUBE_MAP)` on GL.
-
-**Effort:** small — ~2 hours.
+Both backends now wire `ITextureFactory::create(desc, sampler, CubeMapFaces&)`
+to a real implementation. Vulkan creates a single `VkImage` with `arrayLayers=6`
+and `CUBE_COMPATIBLE_BIT`, uploads all six faces from one staging buffer with a
+six-region `vkCmdCopyBufferToImage`, and creates a `VK_IMAGE_VIEW_TYPE_CUBE`
+view. `generateMipmaps` now uses `m_layerCount` so cubemap mip chains stay
+consistent. OpenGL similarly tracks a `m_target` that toggles `GL_TEXTURE_2D` /
+`GL_TEXTURE_CUBE_MAP`. Allocate-only ctor accepts `desc.type = CubeMap` too,
+for cubemap RTs (commit 45ca6a9).
 
 ### 4.3 Cubemap-layered render targets
 
@@ -367,18 +354,20 @@ Additional bookkeeping on the backend:
 
 **Effort:** medium — ~3–5 hours for all eight shaders + call-site updates.
 
-### 4.5 Descriptor arrays (`sampler2DShadow uShadowMaps[3]`)
+### 4.5 Descriptor arrays (`sampler2DShadow uShadowMaps[3]`) — DONE (commit edfe9ee)
 
-**Status:** `DescriptorManager::allocateMaterialSet1` only emits one descriptor per binding. Bindings where `descriptorCount > 1` get a single write, not the expected count.
+`reflectMaterialSamplers` now expands array bindings into per-element entries
+(`"uShadowMaps[0]"`, `"[1]"`, `"[2]"`) sharing the same `(set, binding)` but
+with distinct `arrayElement` values. `allocateMaterialSet1` writes
+`descriptorCount` image infos per binding, drawn from
+`materialTextures[binding + i]`.
 
-**Impact:** `deferred_lighting.frag` has `sampler2DShadow uShadowMaps[3]` (CSM) and `samplerCube uPointShadowMaps[4]` (point shadows). Under Vulkan those bindings would be under-filled and the draw would fail validation.
-
-**Design:** two parts:
-
-1. **Reflection side** — `reflectMaterialSamplers` already skips naming array elements individually. Change it to emit one `ShaderUniformEntry` per `[i]` with the same `(set, binding)` and a new `arrayElement = i` field. Names become `"uShadowMaps[0]"`, `"[1]"`, `"[2]"` — which matches the GL convention the engine's material already uses (`mat.addTexture("uShadowMaps[0]", h0)`).
-2. **Binding side** — `VkTexture2D::bind(slot)` stores into `materialTextures[slot]` as before. `allocateMaterialSet1` loops over expected bindings: for binding `b` with count `K`, the slot range is either the engine's consecutive `slot, slot+1, ..., slot+K-1` (convention: Renderer iterates in name order, so array elements get consecutive slots) OR a reflection-driven lookup (`entries[uniforms["uShadowMaps[0]"].location].arrayElement = 0`, etc.). The reflection-driven path is robust regardless of material iteration order.
-
-**Effort:** small-to-medium — ~2–3 hours. The convention-based path (slot == binding + arrayElement) is the simpler implementation but requires the engine's `Renderer::bindMaterial` to agree on iteration order, which it doesn't currently guarantee.
+The slot/binding decoupling problem (deferred-lighting binds aren't sequential
+matches to slot order) is solved by adding a slot-keyed staging table to
+`BindState`: `texture->bind(slot)` records into `texturesBySlot[slot]`, and
+`setUniform` for a `MaterialSampler` reads that and stores at
+`materialTextures[binding + arrayElement]`. `kMaxMaterialTextures` bumped
+16→32 to fit deferred-lighting's binding=14.
 
 ### 4.6 `ShadowMaps.cpp` point-shadow refactor
 
@@ -407,15 +396,13 @@ Drops `RawGLTexture2D` / `RawGLCubeMap`.
 
 **Effort:** large — ~6–10 hours for correct precompute output (IBL is notoriously finicky about filtering + coordinate handedness; the side-by-side GL vs Vulkan screenshot compare is the gate).
 
-### 4.8 `getImGuiTextureId()` for Vulkan
+### 4.8 `getImGuiTextureId()` for Vulkan — DONE (commit 8e764bb)
 
-**Status:** `VkTexture2D::getImGuiTextureId()` returns 0.
-
-**Impact:** `EditorUI` renders the offscreen viewport color attachment through `ImGui::Image` — under Vulkan the image doesn't display.
-
-**Design:** lazily allocate a `VkDescriptorSet` via `ImGui_ImplVulkan_AddTexture(sampler, view, SHADER_READ_ONLY_OPTIMAL)` on first call and cache it. Cast to `ImTextureID` (`ImU64` on 64-bit targets). Invalidate on layout change — but the layout is always `SHADER_READ_ONLY_OPTIMAL` between passes, so invalidation in practice only happens when the view itself is destroyed (i.e. render-target resize, which already recreates the texture).
-
-**Effort:** small — ~1 hour.
+`VkTexture2D::getImGuiTextureId()` lazily allocates a `VkDescriptorSet` via
+`ImGui_ImplVulkan_AddTexture(sampler, view, SHADER_READ_ONLY_OPTIMAL)` on first
+call and caches it for the texture's lifetime. The destructor calls
+`ImGui_ImplVulkan_RemoveTexture` to free it back to the pool (which was already
+created with `FREE_DESCRIPTOR_SET_BIT`).
 
 ### 4.9 MoltenVK polish (Phase 5)
 
@@ -463,6 +450,11 @@ In chronological order on `main`:
 | 16 | `a13a284` | Port skinned + SSR shaders |
 | 17 | `e807000` | Port `deferred_lighting.frag` + fix VULKAN-macro-redefined |
 | 18 | `267afd4` | main.cpp: SSAO noise via `ITextureFactory` + drop glad include |
+| 19 | `b2eb106` | Phase 4.1: deferred render-pass model in `bindRenderTarget` |
+| 20 | `edfe9ee` | Phase 4.5: descriptor arrays in material set=1 |
+| 21 | `8e764bb` | Phase 4.8: VkTexture2D::getImGuiTextureId via ImGui_ImplVulkan_AddTexture |
+| 22 | `4dc13fa` | Phase 4.2: cubemap texture upload (both backends) |
+| 23 | `45ca6a9` | Allocate-only cubemap RT path on Vulkan |
 
 ---
 
@@ -472,13 +464,14 @@ Very rough, see the conversation log for reasoning. Ranges assume Opus-4.x prici
 
 | Bucket | Remaining items | Hours | Opus USD | Mixed Opus + Sonnet |
 |---|---|---|---|---|
-| Unblocks | 4.1, 4.2, 4.3, 4.5, 4.8 | ~12 | $350–$750 | $150–$300 |
+| Unblocks | 4.3 (cubemap RT face attach) | ~2 | $50–$150 | $20–$60 |
 | Ports | 4.4, 4.6 | ~8 | $200–$500 | $80–$180 |
 | IBL | 4.7 | ~8 | $200–$500 | $80–$180 |
 | Polish | 4.9, 4.10 | ~5 | $150–$300 | $60–$120 |
-| **Total** | | **~33** | **$900–$2,050** | **$370–$780** |
+| **Total** | | **~23** | **$600–$1,450** | **$240–$540** |
 
-A "Vulkan demo at feature parity minus IBL" subset (skipping 4.7) is roughly $700–$1,550 Opus / $290–$600 mixed — and is likely the better stopping point for a tech demo.
+Items 4.1, 4.2, 4.5, 4.8 are now landed (commits b2eb106, 4dc13fa, edfe9ee, 8e764bb).
+A "Vulkan demo at feature parity minus IBL" subset (skipping 4.7) is roughly $400–$950 Opus / $160–$360 mixed — and is likely the better stopping point for a tech demo.
 
 ---
 

@@ -40,12 +40,16 @@ enum class ShaderUniformKind : std::uint8_t {
 };
 
 struct ShaderUniformEntry {
-    ShaderUniformKind   kind       = ShaderUniformKind::Unknown;
-    std::uint32_t       offset     = 0;   // bytes — PushConstant / PerDrawUbo
-    std::uint32_t       size       = 0;   // bytes — PushConstant / PerDrawUbo
-    VkShaderStageFlags  stageFlags = 0;   // PushConstant only
-    std::uint32_t       set        = 0;   // MaterialSampler only
-    std::uint32_t       binding    = 0;   // MaterialSampler only
+    ShaderUniformKind   kind         = ShaderUniformKind::Unknown;
+    std::uint32_t       offset       = 0;   // bytes — PushConstant / PerDrawUbo
+    std::uint32_t       size         = 0;   // bytes — PushConstant / PerDrawUbo
+    VkShaderStageFlags  stageFlags   = 0;   // PushConstant only
+    std::uint32_t       set          = 0;   // MaterialSampler only
+    std::uint32_t       binding      = 0;   // MaterialSampler only
+    // Index into a descriptor array (e.g. uShadowMaps[2] → arrayElement=2).
+    // Always 0 for non-array bindings. allocateMaterialSet1 uses
+    // materialTextures[binding + arrayElement] to populate the array slot.
+    std::uint32_t       arrayElement = 0;   // MaterialSampler only
 };
 
 // Result of reflecting vertex+fragment SPIR-V, passed to VkShader's ctor.

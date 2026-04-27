@@ -291,13 +291,15 @@ void registerSampler(core::UniformDescriptorMap &names,
                      std::vector<ShaderUniformEntry> &entries,
                      const std::string &name,
                      std::uint32_t set,
-                     std::uint32_t binding) {
+                     std::uint32_t binding,
+                     std::uint32_t arrayElement = 0) {
     if (names.find(name) != names.end()) return; // already registered (other stage)
 
     ShaderUniformEntry e{};
-    e.kind    = ShaderUniformKind::MaterialSampler;
-    e.set     = set;
-    e.binding = binding;
+    e.kind         = ShaderUniformKind::MaterialSampler;
+    e.set          = set;
+    e.binding      = binding;
+    e.arrayElement = arrayElement;
 
     const int loc = static_cast<int>(entries.size());
     entries.push_back(e);
@@ -340,7 +342,22 @@ void reflectMaterialSamplers(ShaderReflection &out,
             b->descriptor_type != SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE) continue;
         const std::string name = b->name ? b->name : "";
         if (name.empty()) continue;
-        registerSampler(out.uniforms, out.entries, name, b->set, b->binding);
+
+        // Array bindings (e.g. `uniform sampler2D foo[3];`) appear as a single
+        // SpvReflectDescriptorBinding with count=3. The engine's frontend
+        // resolves names like "foo[0]", "foo[1]", "foo[2]" — register one
+        // uniform entry per element so the lookup succeeds, all sharing the
+        // same set/binding but with arrayElement = 0..count-1.
+        const std::uint32_t arrayCount = b->count > 0 ? b->count : 1;
+        if (arrayCount == 1) {
+            registerSampler(out.uniforms, out.entries, name, b->set, b->binding);
+        } else {
+            for (std::uint32_t i = 0; i < arrayCount; ++i) {
+                registerSampler(out.uniforms, out.entries,
+                                name + "[" + std::to_string(i) + "]",
+                                b->set, b->binding, i);
+            }
+        }
     }
 }
 

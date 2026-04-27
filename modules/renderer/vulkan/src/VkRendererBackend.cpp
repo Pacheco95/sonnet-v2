@@ -1,6 +1,7 @@
 #include <sonnet/renderer/vulkan/VkRendererBackend.h>
 #include <sonnet/renderer/vulkan/VkGpuBuffer.h>
 #include <sonnet/renderer/vulkan/VkGpuMeshFactory.h>
+#include <sonnet/renderer/vulkan/VkRenderTarget.h>
 #include <sonnet/renderer/vulkan/VkRenderTargetFactory.h>
 #include <sonnet/renderer/vulkan/VkShader.h>
 #include <sonnet/renderer/vulkan/VkShaderCompiler.h>
@@ -191,27 +192,17 @@ void VkRendererBackend::beginFrame() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(frame.cmd, &beginInfo));
 
-    // Begin the default render pass immediately with a fixed dark-gray clear.
-    // Phase 3 replaces this with the deferred-pass model (§6 of the plan).
-    const VkClearValue clears[2] = {
-        {.color        = {{0.08f, 0.08f, 0.12f, 1.0f}}},
-        {.depthStencil = {1.0f, 0}},
-    };
-    VkRenderPassBeginInfo rp{};
-    rp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rp.renderPass        = m_swapchain->defaultRenderPass();
-    rp.framebuffer       = m_swapchain->framebuffer(imageIx);
-    rp.renderArea.extent = m_swapchain->extent();
-    rp.clearValueCount   = 2;
-    rp.pClearValues      = clears;
-    vkCmdBeginRenderPass(frame.cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
-
-    // Reset frame-scoped binding state and record the active pass so that
-    // drawIndexed can key pipelines correctly.
+    // Reset frame-scoped binding state and queue the swapchain's default pass
+    // as pending. Nothing is recorded until the first drawIndexed (or the
+    // user binds another RT). This is the deferred-pass model from plan §6.
     m_bindState->reset();
-    m_activeRenderPass = m_swapchain->defaultRenderPass();
-    m_activeColorCount = 1;
-    m_activeHasDepth   = true;
+    m_pending = {};
+    m_pending.renderPass  = m_swapchain->defaultRenderPass();
+    m_pending.framebuffer = m_swapchain->framebuffer(imageIx);
+    m_pending.extent      = m_swapchain->extent();
+    m_pending.colorCount  = 1;
+    m_pending.hasDepth    = true;
+    m_passActive = false;
 
     m_framePending = true;
 }
@@ -222,7 +213,26 @@ void VkRendererBackend::endFrame() {
 
     auto &frame = m_commandContext->current();
 
+    // If the user never bound the default RT before endFrame (or never drew
+    // anywhere), fold to the swapchain pass so the swapchain image transitions
+    // to PRESENT_SRC. ensurePassActive begins it; it'll be ended below.
+    if (m_passActive && m_pending.renderPass != m_swapchain->defaultRenderPass()) {
+        // An offscreen pass is recording; end it and switch to the default RT.
+        vkCmdEndRenderPass(frame.cmd);
+        m_passActive = false;
+        m_pending = {};
+        m_pending.renderPass  = m_swapchain->defaultRenderPass();
+        m_pending.framebuffer = m_swapchain->framebuffer(m_pendingImageIndex);
+        m_pending.extent      = m_swapchain->extent();
+        m_pending.colorCount  = 1;
+        m_pending.hasDepth    = true;
+    }
+    if (!m_passActive) {
+        // Default pass hasn't been begun yet — force a transition-only pass.
+        ensurePassActive();
+    }
     vkCmdEndRenderPass(frame.cmd);
+    m_passActive = false;
     VK_CHECK(vkEndCommandBuffer(frame.cmd));
 
     // renderFinished is per-swapchain-image (owned by Swapchain) so that with
@@ -252,20 +262,95 @@ void VkRendererBackend::endFrame() {
     m_commandContext->advance();
 }
 
-// ── Framebuffer ────────────────────────────────────────────────────────────────
+// ── Framebuffer / pass deferral ────────────────────────────────────────────────
 
-void VkRendererBackend::clear(const api::render::ClearOptions & /*options*/) {
-    // Phase 1: clear is already applied by the render-pass begin in beginFrame().
-    // Phase 3 replaces this with the deferred-pass + vkCmdClearAttachments model.
+void VkRendererBackend::clear(const api::render::ClearOptions &options) {
+    // Fold into pending clear values; the next pass-begin merges them into
+    // VkRenderPassBeginInfo.pClearValues. If a pass is already recording (i.e.
+    // a draw has happened), Vulkan's render pass loadOp can't be retargeted —
+    // a future iteration could emit vkCmdClearAttachments here, but the engine
+    // never calls clear() mid-pass in practice (see plan §6).
+    for (const auto &c : options.colors) {
+        if (c.attachmentIndex >= kMaxColorAttachments) continue;
+        VkClearColorValue v{};
+        v.float32[0] = c.value.r;
+        v.float32[1] = c.value.g;
+        v.float32[2] = c.value.b;
+        v.float32[3] = c.value.a;
+        m_pending.colorClears[c.attachmentIndex] = v;
+    }
+    if (options.depth) {
+        m_pending.depthClearSet = true;
+        m_pending.depthClear    = *options.depth;
+    }
 }
 
 void VkRendererBackend::bindDefaultRenderTarget() {
-    // Phase 1: always rendering to the default RT; no-op. Phase 3 wires up
-    // multi-RT switching with render-pass deferral (plan §6).
+    if (!m_framePending) return;
+    if (m_passActive) {
+        vkCmdEndRenderPass(m_commandContext->current().cmd);
+        m_passActive = false;
+    }
+    m_pending = {};
+    m_pending.renderPass  = m_swapchain->defaultRenderPass();
+    m_pending.framebuffer = m_swapchain->framebuffer(m_pendingImageIndex);
+    m_pending.extent      = m_swapchain->extent();
+    m_pending.colorCount  = 1;
+    m_pending.hasDepth    = true;
 }
 
-void VkRendererBackend::bindRenderTarget(const api::render::IRenderTarget & /*target*/) {
-    SN_VK_TODO("bindRenderTarget — Phase 2/3");
+void VkRendererBackend::bindRenderTarget(const api::render::IRenderTarget &target) {
+    if (!m_framePending) return;
+
+    // Only VkRenderTarget is supported under this backend (the frontend's
+    // BorrowedTexture wraps a texture, not a render target).
+    const auto *vkRT = dynamic_cast<const VkRenderTarget *>(&target);
+    if (!vkRT) {
+        throw VulkanError("VkRendererBackend::bindRenderTarget: target is not a VkRenderTarget");
+    }
+
+    if (m_passActive) {
+        vkCmdEndRenderPass(m_commandContext->current().cmd);
+        m_passActive = false;
+    }
+    m_pending = {};
+    m_pending.renderPass  = vkRT->renderPass();
+    m_pending.framebuffer = vkRT->framebuffer();
+    m_pending.extent      = {vkRT->width(), vkRT->height()};
+    m_pending.colorCount  = vkRT->colorCount();
+    m_pending.hasDepth    = vkRT->hasDepth();
+}
+
+void VkRendererBackend::ensurePassActive() {
+    if (m_passActive || !m_framePending) return;
+    if (m_pending.renderPass == VK_NULL_HANDLE) return; // beginFrame failed (minimized).
+
+    auto &frame = m_commandContext->current();
+
+    // Build clear-values array: one per color attachment + one for depth.
+    // Defaults to opaque-black + 1.0 depth if the user didn't queue a clear.
+    std::array<VkClearValue, kMaxColorAttachments + 1> clears{};
+    for (std::uint32_t i = 0; i < m_pending.colorCount; ++i) {
+        clears[i].color = m_pending.colorClears[i];
+    }
+    if (m_pending.hasDepth) {
+        clears[m_pending.colorCount].depthStencil = {m_pending.depthClear, 0};
+    }
+
+    VkRenderPassBeginInfo rp{};
+    rp.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rp.renderPass        = m_pending.renderPass;
+    rp.framebuffer       = m_pending.framebuffer;
+    rp.renderArea.offset = {0, 0};
+    rp.renderArea.extent = m_pending.extent;
+    rp.clearValueCount   = m_pending.colorCount + (m_pending.hasDepth ? 1u : 0u);
+    rp.pClearValues      = clears.data();
+    vkCmdBeginRenderPass(frame.cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
+
+    m_passActive       = true;
+    m_activeRenderPass = m_pending.renderPass;
+    m_activeColorCount = m_pending.colorCount;
+    m_activeHasDepth   = m_pending.hasDepth;
 }
 
 void VkRendererBackend::setViewport(std::uint32_t width, std::uint32_t height) {
@@ -366,11 +451,24 @@ void VkRendererBackend::setUniform(UniformLocation location, const core::Uniform
             }
             return;
         }
-        case ShaderUniformKind::MaterialSampler:
-            // Binding is determined by the slot passed to texture->bind in
-            // Renderer::bindMaterial; the Sampler value itself is irrelevant
-            // under Vulkan.
+        case ShaderUniformKind::MaterialSampler: {
+            // texture->bind(slot) staged the texture in texturesBySlot[slot];
+            // route it to the descriptor binding the shader expects. For
+            // sampler arrays, arrayElement disambiguates uShadowMaps[i] across
+            // entries that share the same binding number.
+            std::uint32_t slot = 0;
+            std::visit([&](auto &&v) {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, core::Sampler>) {
+                    slot = static_cast<std::uint32_t>(v);
+                }
+            }, value);
+            if (slot >= BindState::kMaxMaterialTextures) return;
+            const auto dstIx = entry->binding + entry->arrayElement;
+            if (dstIx >= BindState::kMaxMaterialTextures) return;
+            m_bindState->materialTextures[dstIx] = m_bindState->texturesBySlot[slot];
             return;
+        }
         case ShaderUniformKind::Unknown:
             return;
     }
@@ -389,6 +487,11 @@ void VkRendererBackend::drawIndexed(std::size_t indexCount) {
         m_bindState->currentIndex  == VK_NULL_HANDLE) {
         return;
     }
+
+    // Begin the pending render pass on demand: state setters / clear / VIS
+    // bind / shader bind all run "outside the pass" from the engine's POV;
+    // we record vkCmdBeginRenderPass right before the first draw on this RT.
+    ensurePassActive();
 
     auto &frame = m_commandContext->current();
 
@@ -476,6 +579,10 @@ void VkRendererBackend::renderImGui() {
     if (!m_framePending) return;
     auto *draw = ImGui::GetDrawData();
     if (!draw || draw->CmdListsCount == 0) return;
+    // imgui_impl_vulkan must record inside an active render pass — use the
+    // pending one (typically the default-RT pass set up by the demo before
+    // the ImGui block).
+    ensurePassActive();
     ImGui_ImplVulkan_RenderDrawData(draw, m_commandContext->current().cmd);
 }
 

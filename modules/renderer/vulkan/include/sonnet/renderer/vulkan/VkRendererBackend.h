@@ -136,10 +136,38 @@ private:
     // Live render state accumulated via setDepthTest/setBlend/etc. Consumed by
     // drawIndexed when it looks up the pipeline.
     api::render::RenderState m_renderState{};
-    // Active pass for pipeline keying.
-    VkRenderPass             m_activeRenderPass  = VK_NULL_HANDLE;
-    std::uint32_t            m_activeColorCount  = 1;
-    bool                     m_activeHasDepth    = true;
+
+    // ── Deferred-pass model (plan §6) ───────────────────────────────────────
+    // bindRenderTarget / bindDefaultRenderTarget set `m_pending`; clear() folds
+    // into `m_pending.colorClears` / `.depthClear`. The first `drawIndexed` (or
+    // `renderImGui()`) calls `ensurePassActive()`, which actually records
+    // vkCmdBeginRenderPass with the merged clear values. Subsequent
+    // bindRenderTarget calls end the active pass and queue the next.
+    static constexpr std::uint32_t kMaxColorAttachments = 8;
+    struct PendingPass {
+        VkRenderPass    renderPass    = VK_NULL_HANDLE;
+        VkFramebuffer   framebuffer   = VK_NULL_HANDLE;
+        VkExtent2D      extent        {0, 0};
+        std::uint32_t   colorCount    = 0;
+        bool            hasDepth      = false;
+        std::array<VkClearColorValue, kMaxColorAttachments> colorClears{};
+        bool            depthClearSet = false;
+        float           depthClear    = 1.0f;
+    };
+    PendingPass m_pending{};
+    bool        m_passActive = false;
+
+    // Mirror of the pending pass once it actually begins — drawIndexed reads
+    // these for the pipeline-cache key (color count, depth presence, render
+    // pass handle).
+    VkRenderPass  m_activeRenderPass = VK_NULL_HANDLE;
+    std::uint32_t m_activeColorCount = 1;
+    bool          m_activeHasDepth   = true;
+
+    // Begin the pending render pass if no pass is currently recording. Called
+    // at the start of every drawIndexed and renderImGui so users can freely
+    // interleave bindRenderTarget + clear + state setters before the first draw.
+    void ensurePassActive();
 
     // GLFW-created surface. Owned here so the destructor can free it after
     // the swapchain (which uses it) but before the instance.

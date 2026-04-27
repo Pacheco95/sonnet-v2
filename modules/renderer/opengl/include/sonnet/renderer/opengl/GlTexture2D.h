@@ -12,6 +12,13 @@ public:
                 const api::render::SamplerDesc &sampler,
                 const api::render::CPUTextureBuffer &data);
 
+    // From six cubemap faces. desc.type must be CubeMap and desc.size sets
+    // each face's dimensions; all six faces must share the same size and
+    // channel layout.
+    GlTexture2D(const api::render::TextureDesc &desc,
+                const api::render::SamplerDesc &sampler,
+                const api::render::CubeMapFaces &faces);
+
     // Allocate-only (for render targets).
     GlTexture2D(const api::render::TextureDesc &desc,
                 const api::render::SamplerDesc &sampler);
@@ -33,6 +40,11 @@ private:
     unsigned                    m_texture    = 0;
     api::render::TextureDesc    m_textureDesc;
     api::render::SamplerDesc    m_samplerDesc;
+
+    // Resolved target — GL_TEXTURE_2D for Texture2D, GL_TEXTURE_CUBE_MAP for
+    // CubeMap. Stored so bind()/unbind() target the correct binding point
+    // without re-deriving from desc each call.
+    unsigned                    m_target     = 0;
 
     void applySamplerState() const;
 };
