@@ -297,24 +297,24 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
                          const api::render::TextureDesc &desc,
                          const api::render::SamplerDesc &sampler)
     : m_device(device), m_bindState(bindState), m_desc(desc), m_sampler(sampler) {
-    if (desc.type != api::render::TextureType::Texture2D) {
-        throw VulkanError("VkTexture2D(allocate-only): CubeMap path not implemented");
-    }
+    const bool isCube = (desc.type == api::render::TextureType::CubeMap);
 
-    m_format    = toVkFormat(desc.format, desc.colorSpace);
-    m_isDepth   = isDepthFormat(desc.format);
-    m_mipLevels = 1; // Render targets don't use mipmaps.
+    m_format     = toVkFormat(desc.format, desc.colorSpace);
+    m_isDepth    = isDepthFormat(desc.format);
+    m_mipLevels  = 1; // Render targets don't auto-generate mipmaps; per-mip RTs are explicit.
+    m_layerCount = isCube ? 6u : 1u;
 
     VkImageUsageFlags usage = toVkImageUsage(desc.usageFlags)
                             | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // allow readbacks
 
     VkImageCreateInfo info{};
     info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    info.flags         = isCube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
     info.imageType     = VK_IMAGE_TYPE_2D;
     info.format        = m_format;
     info.extent        = {desc.size.x, desc.size.y, 1};
     info.mipLevels     = m_mipLevels;
-    info.arrayLayers   = 1;
+    info.arrayLayers   = m_layerCount;
     info.samples       = VK_SAMPLE_COUNT_1_BIT;
     info.tiling        = VK_IMAGE_TILING_OPTIMAL;
     info.usage         = usage;
@@ -339,17 +339,17 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
         transitionImageLayout(cmd, m_image,
                               VK_IMAGE_LAYOUT_UNDEFINED,
                               initialLayout,
-                              aspect, 1, 1);
+                              aspect, 1, m_layerCount);
     });
 
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image    = m_image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.viewType = isCube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format   = m_format;
     viewInfo.subresourceRange.aspectMask = aspect;
     viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.layerCount = 1;
+    viewInfo.subresourceRange.layerCount = m_layerCount;
     VK_CHECK(vkCreateImageView(device.logical(), &viewInfo, nullptr, &m_view));
 
     m_vkSampler = samplers.get(sampler);
