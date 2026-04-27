@@ -8,13 +8,6 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-// glReadPixels is the only raw-GL reach in this file (for the picking pass).
-// Kept OpenGL-only since main_vk.cpp doesn't instantiate EditorUI; a future
-// phase will abstract readback behind IRenderTarget::readPixel.
-#if defined(SONNET_USE_OPENGL)
-#  include <glad/glad.h>
-#endif
-
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -333,8 +326,9 @@ void EditorUI::doPickingPass(EditorParams &p, ImVec2 vpMin, ImVec2 vpSize,
     const int px = static_cast<int>((mp.x - vpMin.x) / vpSize.x * p.fbSize.x);
     const int py = p.fbSize.y - 1
                  - static_cast<int>((mp.y - vpMin.y) / vpSize.y * p.fbSize.y);
-    std::array<std::uint8_t, 4> pixel{};
-    glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    const auto pixel = m_renderer.readPixelRGBA8(p.pickingRT, 0,
+                                                  static_cast<std::uint32_t>(px),
+                                                  static_cast<std::uint32_t>(py));
 
     m_backend.bindDefaultRenderTarget();
     m_backend.setViewport(static_cast<std::uint32_t>(p.fbSize.x),
