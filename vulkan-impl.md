@@ -332,19 +332,13 @@ consistent. OpenGL similarly tracks a `m_target` that toggles `GL_TEXTURE_2D` /
 `GL_TEXTURE_CUBE_MAP`. Allocate-only ctor accepts `desc.type = CubeMap` too,
 for cubemap RTs (commit 45ca6a9).
 
-### 4.3 Cubemap-layered render targets
+### 4.3 Cubemap-layered render targets — DONE (commit 9644fce)
 
-**Status:** `RenderTargetDesc` has no face/layer concept; `VkRenderTarget` builds 2D attachments only.
-
-**Impact:** Needed to render into individual faces of a cubemap, which is required for IBL precompute (irradiance + prefilter) and point-light shadows. Even if we rewrite the shaders to six per-face passes, we still need a way to bind "this cubemap, face N" as the render target.
-
-**Design:**
-
-1. Add a `std::optional<std::uint32_t> faceIndex` to each attachment in `RenderTargetDesc`, or a separate `layerCount` field (for array images / multiview).
-2. `VkRenderTarget` consumes it: the `VkImageView` used in the framebuffer targets one face (`viewType = VK_IMAGE_VIEW_TYPE_2D`, `baseArrayLayer = face`).
-3. `GlRenderTarget` analog: `glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, tex, 0)`.
-
-**Effort:** small — ~2 hours.
+`RenderTargetDesc` gained `isCubemap` and `mipLevels` fields. When isCubemap,
+color (and depth-as-texture) is allocated as a cubemap and the RT pre-builds
+mipLevels × 6 framebuffers/views. `IRenderTarget::selectCubemapFace(face,
+mip)` chooses which one bind() reads. `Renderer::selectCubemapFace` exposes
+this through the frontend handle. Both backends implemented.
 
 ### 4.4 `point_shadow` + IBL shader rewrites (6-face passes)
 
@@ -369,15 +363,14 @@ matches to slot order) is solved by adding a slot-keyed staging table to
 `materialTextures[binding + arrayElement]`. `kMaxMaterialTextures` bumped
 16→32 to fit deferred-lighting's binding=14.
 
-### 4.6 `ShadowMaps.cpp` point-shadow refactor
+### 4.6 `ShadowMaps.cpp` point-shadow refactor — DONE (commit ed5ff58)
 
-**Status:** `ShadowMaps::render` still contains ~80 lines of raw OpenGL for point-light cubemap shadows: `glGenTextures` for each cubemap, `glFramebufferRenderbuffer` for depth, `glFramebufferTexture2D` per face with geometry-shader cube rendering, `glDepthMask`, `glEnable(GL_DEPTH_TEST)`.
-
-**Dependencies:** Sections 4.2 (cubemap textures), 4.3 (cubemap RTs), and 4.4 (six-face shaders).
-
-**Design:** once those land, `ShadowMaps::render` becomes a loop of six per-face render-pass invocations per shadow-casting point light, each rendering the shadow-casting objects with a face-specific view matrix. Drops glad.
-
-**Effort:** medium — ~4–6 hours including verification that shadow correctness matches the geometry-shader version.
+ShadowMaps no longer touches raw GL. Each shadow-casting point light has a
+cubemap RT (R32F color + depth renderbuffer); the per-face loop uses
+`renderer.selectCubemapFace` + `renderer.bindRenderTarget`. `glDepthMask` is
+now `setDepthWrite`. The point_shadow shader was already a normal vert+frag
+pair (no geometry shader); the OpenGL-only geometry-shader fan-out path
+described in the original plan never existed in this branch.
 
 ### 4.7 `IBL.h` rewrite
 
@@ -455,6 +448,8 @@ In chronological order on `main`:
 | 21 | `8e764bb` | Phase 4.8: VkTexture2D::getImGuiTextureId via ImGui_ImplVulkan_AddTexture |
 | 22 | `4dc13fa` | Phase 4.2: cubemap texture upload (both backends) |
 | 23 | `45ca6a9` | Allocate-only cubemap RT path on Vulkan |
+| 24 | `9644fce` | Phase 4.3: cubemap render targets with per-face attachment |
+| 25 | `ed5ff58` | Phase 4.6: ShadowMaps point-shadow refactor onto cubemap RT |
 
 ---
 
@@ -464,14 +459,19 @@ Very rough, see the conversation log for reasoning. Ranges assume Opus-4.x prici
 
 | Bucket | Remaining items | Hours | Opus USD | Mixed Opus + Sonnet |
 |---|---|---|---|---|
-| Unblocks | 4.3 (cubemap RT face attach) | ~2 | $50–$150 | $20–$60 |
-| Ports | 4.4, 4.6 | ~8 | $200–$500 | $80–$180 |
+| Ports | 4.4 (IBL shaders only — point_shadow already standard) | ~3 | $80–$200 | $30–$80 |
 | IBL | 4.7 | ~8 | $200–$500 | $80–$180 |
+| Build | full demo on Vulkan (CMakeLists.txt) + smoke test | ~2 | $50–$150 | $20–$60 |
 | Polish | 4.9, 4.10 | ~5 | $150–$300 | $60–$120 |
-| **Total** | | **~23** | **$600–$1,450** | **$240–$540** |
+| **Total** | | **~18** | **$480–$1,150** | **$190–$440** |
 
-Items 4.1, 4.2, 4.5, 4.8 are now landed (commits b2eb106, 4dc13fa, edfe9ee, 8e764bb).
-A "Vulkan demo at feature parity minus IBL" subset (skipping 4.7) is roughly $400–$950 Opus / $160–$360 mixed — and is likely the better stopping point for a tech demo.
+Items 4.1, 4.2, 4.3, 4.5, 4.6, 4.8 are landed. The remaining majority is the
+IBL.h rewrite (item 4.7) — it's the last raw-GL holdout in the demo and the
+gating refactor for full demo parity on Vulkan.
+
+A "Vulkan demo at feature parity minus IBL" subset (skipping 4.7) is roughly
+$280–$650 Opus / $110–$260 mixed — likely the better stopping point for a
+tech demo, with sky/IBL falling back to a flat default cubemap.
 
 ---
 
