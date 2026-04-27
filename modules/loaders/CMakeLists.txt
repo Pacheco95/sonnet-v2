@@ -18,4 +18,6 @@ target_link_libraries(sonnet_loaders
 
 sonnet_add_module_test(sonnet_loaders
     tests/BoundsTests.cpp
+    tests/ShaderLoaderTests.cpp
+    tests/TextureLoaderTests.cpp
 )
