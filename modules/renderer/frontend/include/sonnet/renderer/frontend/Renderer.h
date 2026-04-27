@@ -46,6 +46,11 @@ public:
     [[nodiscard]] core::GPUTextureHandle         colorTextureHandle(core::RenderTargetHandle handle,
                                                                     std::size_t colorIndex = 0);
     [[nodiscard]] core::GPUTextureHandle         depthTextureHandle(core::RenderTargetHandle handle);
+    // Cubemap RTs only: select which face/mip the next bindRenderTarget targets.
+    // Throws on a non-cubemap RT.
+    void                                         selectCubemapFace(core::RenderTargetHandle handle,
+                                                                    std::uint32_t face,
+                                                                    std::uint32_t mipLevel = 0);
     // Register an externally-created ITexture (e.g. IBL cubemaps) and return a handle.
     [[nodiscard]] core::GPUTextureHandle         registerRawTexture(std::unique_ptr<api::render::ITexture> tex);
     // Return the backend-native texture id (e.g. GLuint) for a texture handle.

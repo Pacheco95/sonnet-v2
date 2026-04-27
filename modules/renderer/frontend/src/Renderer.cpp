@@ -104,6 +104,15 @@ void Renderer::bindRenderTarget(RenderTargetHandle handle) {
     m_backend.bindRenderTarget(*it->second);
 }
 
+void Renderer::selectCubemapFace(RenderTargetHandle handle,
+                                  std::uint32_t face, std::uint32_t mipLevel) {
+    auto it = m_renderTargets.find(handle);
+    if (it == m_renderTargets.end()) {
+        throw std::invalid_argument("selectCubemapFace: unknown RenderTargetHandle");
+    }
+    it->second->selectCubemapFace(face, mipLevel);
+}
+
 GPUTextureHandle Renderer::depthTextureHandle(RenderTargetHandle handle) {
     if (m_renderTargets.find(handle) == m_renderTargets.end())
         throw std::invalid_argument("depthTextureHandle: unknown RenderTargetHandle");

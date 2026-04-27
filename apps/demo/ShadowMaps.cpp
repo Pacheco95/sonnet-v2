@@ -1,7 +1,5 @@
 #include "ShadowMaps.h"
 
-#include "IBL.h" // for RawGLCubeMap
-
 #include <sonnet/api/render/IRenderTarget.h>
 #include <sonnet/core/RendererTraits.h>
 
@@ -40,37 +38,27 @@ ShadowMaps::ShadowMaps(sonnet::renderer::frontend::Renderer        &renderer,
     }
 
     // ── Point-light shadow cubemaps (MAX_SHADOW_LIGHTS × R32F, POINT_SHADOW_SIZE²) ─
-    glGenTextures(MAX_SHADOW_LIGHTS, m_pointShadowCubeTex.data());
+    // Each light gets a cubemap RT: R32F color holds the shader-computed
+    // light-space distance; depth is a renderbuffer used only to z-sort
+    // triangles within each face (the cubemap itself isn't sampled for depth).
+    const SamplerDesc ptShadowSamplerDesc{
+        .minFilter = MinFilter::Linear,
+        .magFilter = MagFilter::Linear,
+        .wrapS     = TextureWrap::ClampToEdge,
+        .wrapT     = TextureWrap::ClampToEdge,
+        .wrapR     = TextureWrap::ClampToEdge,
+    };
     for (int i = 0; i < MAX_SHADOW_LIGHTS; ++i) {
-        glBindTexture(GL_TEXTURE_CUBE_MAP, m_pointShadowCubeTex[i]);
-        for (int f = 0; f < 6; ++f)
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0,
-                         GL_R32F, POINT_SHADOW_SIZE, POINT_SHADOW_SIZE, 0,
-                         GL_RED, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        m_pointShadowRTHandles[i] = renderer.createRenderTarget(RenderTargetDesc{
+            .width     = static_cast<std::uint32_t>(POINT_SHADOW_SIZE),
+            .height    = static_cast<std::uint32_t>(POINT_SHADOW_SIZE),
+            .colors    = {{TextureFormat::R32F, ptShadowSamplerDesc}},
+            .depth     = RenderBufferDesc{},
+            .isCubemap = true,
+            .mipLevels = 1,
+        });
+        m_pointShadowHandles[i] = renderer.colorTextureHandle(m_pointShadowRTHandles[i], 0);
     }
-    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
-
-    glGenFramebuffers(1, &m_pointShadowFBO);
-    glGenRenderbuffers(1, &m_pointShadowRBO);
-    glBindRenderbuffer(GL_RENDERBUFFER, m_pointShadowRBO);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24,
-                          POINT_SHADOW_SIZE, POINT_SHADOW_SIZE);
-    glBindRenderbuffer(GL_RENDERBUFFER, 0);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, m_pointShadowFBO);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                              GL_RENDERBUFFER, m_pointShadowRBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    // Register cubemaps with the engine renderer.
-    for (int i = 0; i < MAX_SHADOW_LIGHTS; ++i)
-        m_pointShadowHandles[i] = renderer.registerRawTexture(
-            std::make_unique<RawGLCubeMap>(m_pointShadowCubeTex[i]));
 
     // ── Shadow materials ──────────────────────────────────────────────────────
     m_shadowMatTmpl = renderer.createMaterial(MaterialTemplate{
@@ -157,7 +145,7 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
         m_renderer.bindRenderTarget(m_csmRTHandles[c]);
         m_backend.setViewport(static_cast<std::uint32_t>(SHADOW_SIZE),
                               static_cast<std::uint32_t>(SHADOW_SIZE));
-        glDepthMask(GL_TRUE);
+        m_backend.setDepthWrite(true);
         m_backend.clear({ .depth = 1.0f });
 
         FrameContext shadowCtx{
@@ -200,12 +188,6 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
         });
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, m_pointShadowFBO);
-    glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST);
-    m_backend.setViewport(static_cast<std::uint32_t>(POINT_SHADOW_SIZE),
-                          static_cast<std::uint32_t>(POINT_SHADOW_SIZE));
-
     int shadowLightCount = 0;
     for (const auto &pl : pointLights) {
         if (shadowLightCount >= MAX_SHADOW_LIGHTS) break;
@@ -215,12 +197,17 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
         m_ptShadowMat->set("uFarPlane", POINT_SHADOW_FAR);
 
         for (int f = 0; f < 6; ++f) {
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + f,
-                                   m_pointShadowCubeTex[shadowIdx], 0);
-            glDrawBuffer(GL_COLOR_ATTACHMENT0);
-            glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            m_renderer.selectCubemapFace(m_pointShadowRTHandles[shadowIdx],
+                                          static_cast<std::uint32_t>(f));
+            m_renderer.bindRenderTarget(m_pointShadowRTHandles[shadowIdx]);
+            m_backend.setViewport(static_cast<std::uint32_t>(POINT_SHADOW_SIZE),
+                                  static_cast<std::uint32_t>(POINT_SHADOW_SIZE));
+            m_backend.setDepthTest(true);
+            m_backend.setDepthWrite(true);
+            m_backend.clear(ClearOptions{
+                .colors = {{0, glm::vec4{1.0f, 0.0f, 0.0f, 1.0f}}},
+                .depth  = 1.0f,
+            });
 
             FrameContext faceCtx{
                 .viewMatrix       = faceViews[f],
@@ -236,9 +223,6 @@ int ShadowMaps::render(const sonnet::world::Scene                         &scene
         }
         ++shadowLightCount;
     }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
     return shadowLightCount;
 }

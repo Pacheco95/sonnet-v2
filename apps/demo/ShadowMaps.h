@@ -8,12 +8,6 @@
 #include <sonnet/renderer/frontend/Renderer.h>
 #include <sonnet/world/Scene.h>
 
-// Point-shadow cubemap FBO + textures are still raw OpenGL (geometry-shader
-// one-pass rendering). Phase 7 will add cubemap-layered rendering to the
-// backend abstraction and let this file drop its glad dependency entirely.
-#if defined(SONNET_USE_OPENGL)
-#  include <glad/glad.h>
-#endif
 #include <glm/glm.hpp>
 
 #include <array>
@@ -55,11 +49,9 @@ private:
     std::array<sonnet::core::RenderTargetHandle, NUM_CASCADES>      m_csmRTHandles{};
     std::array<sonnet::core::GPUTextureHandle,   NUM_CASCADES>      m_csmDepthHandles{};
 
-    // Point-shadow resources (raw GL)
-    std::array<GLuint, MAX_SHADOW_LIGHTS>                            m_pointShadowCubeTex{};
-    GLuint                                                           m_pointShadowFBO  = 0;
-    GLuint                                                           m_pointShadowRBO  = 0;
-    std::array<sonnet::core::GPUTextureHandle, MAX_SHADOW_LIGHTS>   m_pointShadowHandles{};
+    // Point-shadow resources (cubemap RTs through the engine abstraction)
+    std::array<sonnet::core::RenderTargetHandle, MAX_SHADOW_LIGHTS> m_pointShadowRTHandles{};
+    std::array<sonnet::core::GPUTextureHandle,   MAX_SHADOW_LIGHTS> m_pointShadowHandles{};
 
     // Shadow materials
     sonnet::core::MaterialTemplateHandle              m_shadowMatTmpl{};
