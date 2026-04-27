@@ -25,10 +25,8 @@ public:
     [[nodiscard]] std::unique_ptr<api::render::ITexture> create(
         const api::render::TextureDesc &desc,
         const api::render::SamplerDesc &sampler,
-        const api::render::CubeMapFaces & /*faces*/) const override {
-        // CubeMap support will be added when needed.
-        (void)desc; (void)sampler;
-        throw std::runtime_error("GlTextureFactory: CubeMap not yet implemented");
+        const api::render::CubeMapFaces &faces) const override {
+        return std::make_unique<GlTexture2D>(desc, sampler, faces);
     }
 
     [[nodiscard]] std::unique_ptr<api::render::ITexture> create(

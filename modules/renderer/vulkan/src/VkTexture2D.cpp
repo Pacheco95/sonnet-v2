@@ -9,6 +9,7 @@
 #include <imgui_impl_vulkan.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -178,6 +179,122 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
 
 VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bindState,
                          const api::render::TextureDesc &desc,
+                         const api::render::SamplerDesc &sampler,
+                         const api::render::CubeMapFaces &faces)
+    : m_device(device), m_bindState(bindState), m_desc(desc), m_sampler(sampler) {
+    if (desc.type != api::render::TextureType::CubeMap) {
+        throw VulkanError("VkTexture2D(cubemap ctor): desc.type must be CubeMap");
+    }
+    const core::Texels *facePtrs[6] = {
+        &faces.right, &faces.left, &faces.top, &faces.bottom, &faces.front, &faces.back,
+    };
+    const std::size_t faceBytes = facePtrs[0]->size();
+    if (faceBytes == 0) throw VulkanError("VkTexture2D(cubemap): face 0 is empty");
+    for (int i = 1; i < 6; ++i) {
+        if (facePtrs[i]->size() != faceBytes) {
+            throw VulkanError("VkTexture2D(cubemap): face byte counts differ");
+        }
+    }
+
+    m_format     = toVkFormat(desc.format, desc.colorSpace);
+    m_isDepth    = false;
+    m_mipLevels  = mipLevelCount(desc);
+    m_layerCount = 6;
+
+    VkImageUsageFlags usage = toVkImageUsage(desc.usageFlags)
+                            | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                            | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+    VkImageCreateInfo info{};
+    info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    // Cubemap creation requires CUBE_COMPATIBLE_BIT plus arrayLayers=6.
+    info.flags         = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    info.imageType     = VK_IMAGE_TYPE_2D;
+    info.format        = m_format;
+    info.extent        = {desc.size.x, desc.size.y, 1};
+    info.mipLevels     = m_mipLevels;
+    info.arrayLayers   = 6;
+    info.samples       = VK_SAMPLE_COUNT_1_BIT;
+    info.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    info.usage         = usage;
+    info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    VK_CHECK(vmaCreateImage(device.allocator(), &info, &allocInfo, &m_image, &m_alloc, nullptr));
+
+    // One staging buffer holding all six faces back-to-back. Each face's mip 0
+    // gets one VkBufferImageCopy region keyed off baseArrayLayer.
+    const VkDeviceSize totalBytes = static_cast<VkDeviceSize>(faceBytes) * 6;
+    VkBufferCreateInfo bufInfo{};
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size  = totalBytes;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VmaAllocationCreateInfo bufAlloc{};
+    bufAlloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    bufAlloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                   | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    VkBuffer          staging      = VK_NULL_HANDLE;
+    VmaAllocation     stagingAlloc = VK_NULL_HANDLE;
+    VmaAllocationInfo stagingInfo{};
+    VK_CHECK(vmaCreateBuffer(device.allocator(), &bufInfo, &bufAlloc,
+                             &staging, &stagingAlloc, &stagingInfo));
+    auto *stagingBytes = static_cast<std::uint8_t *>(stagingInfo.pMappedData);
+    for (int i = 0; i < 6; ++i) {
+        std::memcpy(stagingBytes + i * faceBytes, facePtrs[i]->data(), faceBytes);
+    }
+
+    device.runOneShot([&](VkCommandBuffer cmd) {
+        transitionImageLayout(cmd, m_image,
+                              VK_IMAGE_LAYOUT_UNDEFINED,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              VK_IMAGE_ASPECT_COLOR_BIT,
+                              m_mipLevels, m_layerCount);
+
+        std::array<VkBufferImageCopy, 6> regions{};
+        for (std::uint32_t f = 0; f < 6; ++f) {
+            regions[f].bufferOffset                    = f * faceBytes;
+            regions[f].bufferRowLength                 = 0;
+            regions[f].bufferImageHeight               = 0;
+            regions[f].imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+            regions[f].imageSubresource.mipLevel       = 0;
+            regions[f].imageSubresource.baseArrayLayer = f;
+            regions[f].imageSubresource.layerCount     = 1;
+            regions[f].imageOffset                     = {0, 0, 0};
+            regions[f].imageExtent                     = {desc.size.x, desc.size.y, 1};
+        }
+        vkCmdCopyBufferToImage(cmd, staging, m_image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               static_cast<std::uint32_t>(regions.size()), regions.data());
+
+        if (m_mipLevels > 1) {
+            generateMipmaps(cmd);
+        } else {
+            transitionImageLayout(cmd, m_image,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                  VK_IMAGE_ASPECT_COLOR_BIT, m_mipLevels, m_layerCount);
+        }
+    });
+
+    vmaDestroyBuffer(device.allocator(), staging, stagingAlloc);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image    = m_image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    viewInfo.format   = m_format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = m_mipLevels;
+    viewInfo.subresourceRange.layerCount = 6;
+    VK_CHECK(vkCreateImageView(device.logical(), &viewInfo, nullptr, &m_view));
+
+    m_vkSampler = samplers.get(sampler);
+}
+
+VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bindState,
+                         const api::render::TextureDesc &desc,
                          const api::render::SamplerDesc &sampler)
     : m_device(device), m_bindState(bindState), m_desc(desc), m_sampler(sampler) {
     if (desc.type != api::render::TextureType::Texture2D) {
@@ -283,7 +400,7 @@ void VkTexture2D::generateMipmaps(VkCommandBuffer cmd) {
     std::int32_t mipH = static_cast<std::int32_t>(m_desc.size.y);
 
     for (std::uint32_t i = 1; i < m_mipLevels; ++i) {
-        // Transition previous level to TRANSFER_SRC for the blit.
+        // Transition previous level (all layers) to TRANSFER_SRC for the blit.
         VkImageMemoryBarrier barrier{};
         barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         barrier.image                           = m_image;
@@ -292,7 +409,7 @@ void VkTexture2D::generateMipmaps(VkCommandBuffer cmd) {
         barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
         barrier.subresourceRange.baseMipLevel   = i - 1;
         barrier.subresourceRange.levelCount     = 1;
-        barrier.subresourceRange.layerCount     = 1;
+        barrier.subresourceRange.layerCount     = m_layerCount;
         barrier.oldLayout                       = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         barrier.newLayout                       = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barrier.srcAccessMask                   = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -305,12 +422,12 @@ void VkTexture2D::generateMipmaps(VkCommandBuffer cmd) {
         VkImageBlit blit{};
         blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.srcSubresource.mipLevel   = i - 1;
-        blit.srcSubresource.layerCount = 1;
+        blit.srcSubresource.layerCount = m_layerCount;
         blit.srcOffsets[0]             = {0, 0, 0};
         blit.srcOffsets[1]             = {mipW, mipH, 1};
         blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.dstSubresource.mipLevel   = i;
-        blit.dstSubresource.layerCount = 1;
+        blit.dstSubresource.layerCount = m_layerCount;
         blit.dstOffsets[0]             = {0, 0, 0};
         blit.dstOffsets[1]             = {mipW > 1 ? mipW / 2 : 1,
                                           mipH > 1 ? mipH / 2 : 1, 1};
@@ -333,7 +450,7 @@ void VkTexture2D::generateMipmaps(VkCommandBuffer cmd) {
         if (mipH > 1) mipH /= 2;
     }
 
-    // Final level transition.
+    // Final level transition (all layers).
     VkImageMemoryBarrier tail{};
     tail.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     tail.image                           = m_image;
@@ -342,7 +459,7 @@ void VkTexture2D::generateMipmaps(VkCommandBuffer cmd) {
     tail.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     tail.subresourceRange.baseMipLevel   = m_mipLevels - 1;
     tail.subresourceRange.levelCount     = 1;
-    tail.subresourceRange.layerCount     = 1;
+    tail.subresourceRange.layerCount     = m_layerCount;
     tail.oldLayout                       = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     tail.newLayout                       = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     tail.srcAccessMask                   = VK_ACCESS_TRANSFER_WRITE_BIT;

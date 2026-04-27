@@ -15,10 +15,11 @@ std::unique_ptr<api::render::ITexture> VkTextureFactory::create(
 }
 
 std::unique_ptr<api::render::ITexture> VkTextureFactory::create(
-    const api::render::TextureDesc &/*desc*/,
-    const api::render::SamplerDesc &/*sampler*/,
-    const api::render::CubeMapFaces &/*faces*/) const {
-    SN_VK_TODO("VkTextureFactory::create(CubeMapFaces) — needed by IBL in Phase 7");
+    const api::render::TextureDesc &desc,
+    const api::render::SamplerDesc &sampler,
+    const api::render::CubeMapFaces &faces) const {
+    return std::make_unique<VkTexture2D>(m_device, m_samplers, m_bindState,
+                                          desc, sampler, faces);
 }
 
 std::unique_ptr<api::render::ITexture> VkTextureFactory::create(
