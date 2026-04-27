@@ -1,0 +1,66 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "debug-opengl",
+            "displayName": "Debug — OpenGL backend",
+            "binaryDir": "${sourceDir}/cmake-build-debug-opengl",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "SONNET_RENDERER_BACKEND": "OpenGL"
+            }
+        },
+        {
+            "name": "debug-vulkan",
+            "displayName": "Debug — Vulkan backend",
+            "binaryDir": "${sourceDir}/cmake-build-debug-vulkan",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "SONNET_RENDERER_BACKEND": "Vulkan"
+            }
+        },
+        {
+            "name": "coverage",
+            "displayName": "Coverage — gcov instrumentation, OpenGL backend",
+            "binaryDir": "${sourceDir}/cmake-build-coverage",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "SONNET_RENDERER_BACKEND": "OpenGL",
+                "SONNET_COVERAGE":         "ON"
+            },
+            "environment": {
+                "CC":  "clang-20",
+                "CXX": "clang++-20"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "debug-opengl", "configurePreset": "debug-opengl" },
+        { "name": "debug-vulkan", "configurePreset": "debug-vulkan" },
+        { "name": "coverage",     "configurePreset": "coverage" },
+        {
+            "name": "coverage-report",
+            "configurePreset": "coverage",
+            "targets": ["coverage"]
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "debug-opengl",
+            "configurePreset": "debug-opengl",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "debug-vulkan",
+            "configurePreset": "debug-vulkan",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "coverage",
+            "configurePreset": "coverage",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}

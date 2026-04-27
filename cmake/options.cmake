@@ -1,4 +1,5 @@
 option(SONNET_BUILD_TESTS "Build Sonnet tests" ON)
+option(SONNET_COVERAGE    "Instrument engine modules for gcov coverage" OFF)
 
 set(SONNET_RENDERER_BACKEND "Auto" CACHE STRING
     "Renderer backend: Auto | OpenGL | Vulkan")
