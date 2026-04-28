@@ -39,6 +39,14 @@ public:
                            std::uint32_t                      colorAttachmentCount,
                            bool                               hasDepthAttachment);
 
+    // Destroy every cached pipeline whose key references this shader. Called
+    // from VkRendererBackend after Renderer::reloadShader recompiles a shader
+    // in place — without this, cached pipelines keep binding the old shader
+    // module via the still-live VkShader pointer. Safe to call only when no
+    // command buffer that recorded one of the affected pipelines is still
+    // in flight; reload runs between frames so this holds.
+    void invalidateForShader(const VkShader *shader);
+
 private:
     struct Key {
         const VkShader           *shader;

@@ -159,6 +159,9 @@ void Renderer::reloadShader(core::ShaderHandle handle,
     if (it == m_shaders.end()) return;
     // Compile first — if it throws the old shader stays in place.
     auto newShader = m_backend.shaderCompiler()(vertSrc, fragSrc);
+    // Drop any backend-side caches keyed on the old IShader pointer (Vulkan
+    // pipelines hold raw VkShader*; the OpenGL backend has nothing to do).
+    m_backend.invalidatePipelinesForShader(*it->second);
     it->second = std::move(newShader);
 }
 

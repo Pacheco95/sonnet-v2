@@ -594,6 +594,14 @@ void VkRendererBackend::drawIndexed(std::size_t indexCount) {
     m_bindState->clearDrawScopedState();
 }
 
+void VkRendererBackend::invalidatePipelinesForShader(const api::render::IShader &shader) {
+    // Wait for any submitted frame still touching the old shader's pipelines
+    // to finish on the GPU before vkDestroyPipeline runs. Reload is a rare
+    // hot-path; the device-wide stall is fine here.
+    if (m_device) m_device->waitIdle();
+    m_pipelineCache->invalidateForShader(static_cast<const VkShader *>(&shader));
+}
+
 // ── Factory accessors ──────────────────────────────────────────────────────────
 
 api::render::IShaderCompiler     &VkRendererBackend::shaderCompiler()     { return *m_shaderCompiler; }

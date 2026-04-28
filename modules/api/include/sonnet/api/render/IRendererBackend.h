@@ -76,6 +76,13 @@ public:
     virtual void setUniform(UniformLocation location, const core::UniformValue &value) = 0;
     virtual void drawIndexed(std::size_t indexCount) = 0;
 
+    // Drop any cached pipeline / state that references this shader. Called by
+    // Renderer::reloadShader after the in-place recompile so backends with
+    // shader-keyed caches (Vulkan's PipelineCache holds raw VkShader*) don't
+    // keep using the previous module. Default no-op for backends that have
+    // nothing cached on a per-shader basis (OpenGL).
+    virtual void invalidatePipelinesForShader(const IShader & /*shader*/) {}
+
     // Factories (owned by the backend)
     [[nodiscard]] virtual IShaderCompiler  &shaderCompiler()       = 0;
     [[nodiscard]] virtual ITextureFactory  &textureFactory()       = 0;

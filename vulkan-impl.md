@@ -1,6 +1,6 @@
 # Vulkan Backend Implementation Status
 
-Snapshot as of the current `main` branch (commit `267afd4` and 17 ancestors on this feature chain). This document covers the original plan, everything landed to date, what still needs to be done before the full `apps/demo` can run under Vulkan, and the rough cost of finishing.
+Snapshot as of the current `main` branch (commit `5457afd`). This document covers the original plan, everything landed to date, what still needs to be done before the full `apps/demo` can run under Vulkan, and the rough cost of finishing.
 
 ---
 
@@ -58,7 +58,7 @@ Selection is compile-time via `SONNET_USE_OPENGL` / `SONNET_USE_VULKAN` compile 
 - `modules/renderer/frontend/CMakeLists.txt` — conditionally links `sonnet::renderer::opengl` or `sonnet::renderer::vulkan`, and compiles the `BackendFactory.cpp` that dispatches between them.
 - `vendor/CMakeLists.txt` — `glad` only added under OpenGL.
 - `modules/window/CMakeLists.txt` — adds `Vulkan::Vulkan` as a PUBLIC link and defines `GLFW_INCLUDE_VULKAN` as a PUBLIC compile definition under Vulkan, so every translation unit that includes `<GLFW/glfw3.h>` pulls in `vulkan.h` (the define must live at CMake level, not in `GLFWWindow.h`, because `GLFWInputAdapter.h` pulls GLFW first and `#pragma once` suppresses the later header-level `#define`).
-- `apps/demo/CMakeLists.txt` — compiles either `main.cpp` (OpenGL — full demo) or `main_vk.cpp` (Vulkan — minimal triangle demo). The split exists until the main-demo refactor items below are finished.
+- `apps/demo/CMakeLists.txt` — both backends now compile the same `main.cpp` for the primary `demo` target (full deferred + IBL + shadows + post + editor pipeline). `main_vk.cpp` is preserved as a secondary minimal-triangle sanity-check binary used during bring-up; it's only a backstop, not the shipping demo path.
 
 ### 3.2 API-layer additions
 
@@ -301,9 +301,45 @@ Trivial shaders that required no changes: `tonemap.vert`, `fxaa.vert`, `ssao.ver
 - `apps/demo/ShadowMaps.{h,cpp}` — takes `IRendererBackend&`. Still contains the raw-GL cubemap FBO for point-light shadows (Section 4.6).
 - `apps/demo/main.cpp` — no longer needs the `GlRendererBackend&` downcast; stores `auto &backend = *backendPtr`. SSAO noise texture creation now goes through `renderer.createTexture` with an RGBA32F `CPUTextureBuffer` instead of raw `glGenTextures`. The pre-ImGui `glClearColor` + `glClear` is replaced by `backend.clear({.colors={{0, ...}}})`. Most importantly, `<glad/glad.h>` is no longer included by main.cpp.
 
-### 3.18 `main_vk.cpp` — Vulkan demo
+### 3.18 `main_vk.cpp` — Vulkan bring-up sanity binary
 
-`apps/demo/main_vk.cpp` runs a fully self-contained triangle demo exercising the entire Vulkan path end-to-end: inline Vulkan-GLSL shader with `layout(push_constant) Push { mat4 uModel; }` + `layout(set=2, binding=0) PerDraw { vec4 uTint; }`; vertex + index buffers created through the factory; ImGui overlay via the same `ImGuiLayer` the OpenGL demo uses; FPS counter + escape-to-close. Runs clean on MoltenVK with portability + MVK ICD.
+The full `apps/demo/main.cpp` now builds and runs on both backends (since
+commit `9ebe04d`). `apps/demo/main_vk.cpp` was the original Vulkan-only
+self-contained triangle demo and is kept around as a minimal sanity-check
+executable for bring-up: inline Vulkan-GLSL shader with
+`layout(push_constant) Push { mat4 uModel; }` + `layout(set=2, binding=0)
+PerDraw { vec4 uTint; }`; vertex + index buffers created through the
+factory; ImGui overlay via the same `ImGuiLayer` the OpenGL demo uses; FPS
+counter + escape-to-close. Runs clean on MoltenVK with portability + MVK
+ICD. Useful when the full demo is broken and you want to confirm the
+backend-itself still works.
+
+### 3.19 Runtime fixes for the full-demo path on Vulkan
+
+Several non-trivial runtime fixes landed after the full demo started
+building under Vulkan; they belong in this snapshot because they encode
+load-bearing assumptions:
+
+- `9b91dc8` — `endFrame` now respects an in-flight frame; mip transitions
+  use the right access masks; `RGB8` is widened to `RGBA8` on upload (MoltenVK
+  doesn't expose `R8G8B8_*`); render-buffer depth attachments work on Vulkan.
+- `9b8cd0a` — depth layouts unified to `DEPTH_STENCIL_READ_ONLY_OPTIMAL`
+  when sampled and `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` when written; push
+  constant ranges declared with the exact stage flags expected by validation;
+  default texture installed for unbound material slots; viewport flipped
+  for Vulkan's top-left origin.
+- `45d94be` — `Renderer::beginFrame`/`endFrame` are reference-counted so
+  IBL bake (which begins/ends inner frames during init while the outer demo
+  frame is still pending) doesn't double-present and cause flicker.
+- `50dacf8` — **Camera/Lights UBO race fix**: when a UBO `update()` call
+  happens *inside* an active frame (e.g. mid-pass), Vulkan can no longer use
+  the host-mapped path because the GPU is still reading the previous
+  contents. The Vulkan `IGpuBuffer::update()` now routes to
+  `vkCmdUpdateBuffer` recorded into the current frame's command buffer
+  whenever a frame is pending, and falls back to the host-mapped write
+  outside a frame. **Anyone touching the renderer needs to know this** —
+  small per-frame UBO writes look free under OpenGL but cost a command
+  buffer recording on Vulkan.
 
 ---
 
@@ -340,14 +376,14 @@ mipLevels × 6 framebuffers/views. `IRenderTarget::selectCubemapFace(face,
 mip)` chooses which one bind() reads. `Renderer::selectCubemapFace` exposes
 this through the frontend handle. Both backends implemented.
 
-### 4.4 `point_shadow` + IBL shader rewrites (6-face passes) — PARTIAL
+### 4.4 `point_shadow` + IBL shader rewrites (6-face passes) — DONE
 
-`point_shadow.{vert,frag}` ported in commit 0e2ade2 — they were already
+`point_shadow.{vert,frag}` ported in commit `0e2ade2` — they were already
 single-pass (no geometry-shader trick), so the rewrite was just SET()/push
-convention. The IBL shaders (`ibl/*.{vert,frag}`) are also single-pass
-already (each capture invocation already binds a single face); they will
-need the SET() convention work as part of the IBL.h refactor (4.7) since
-both land at the same time.
+convention. All six IBL shaders (`ibl/equirect_to_cube.frag`,
+`irradiance.frag`, `prefilter.frag`, `brdf_lut.{vert,frag}`, `capture.vert`)
+are likewise single-pass; the SET()/push port landed alongside the IBL.h
+rewrite (commit `4158189`, item 4.7).
 
 ### 4.5 Descriptor arrays (`sampler2DShadow uShadowMaps[3]`) — DONE (commit edfe9ee)
 
@@ -398,19 +434,27 @@ errors after this session's work. Commit 1fbc41f added an explicit query of
 mutableComparisonSamplers + imageViewFormatReinterpretation.
 
 Still outstanding:
-- Validation-layer best-practices layer soak over 10+ minutes of main_vk.cpp.
+- Validation-layer best-practices layer soak over 10+ minutes of the full demo.
 - HiDPI verification on retina (`glfwGetFramebufferSize` and `currentExtent`
   parity).
 - README note on `VK_ICD_FILENAMES` if not using the `.pkg` SDK installer.
 
-### 4.10 Phase 8 hardening
+### 4.10 Phase 8 hardening — PARTIAL
 
-- Stress test: 1000+ drawIndexed per frame, no `OUT_OF_POOL_MEMORY`, no VMA fragmentation warnings.
-- Long soak: 10-minute run, no leaked ImGui textures, no leaked descriptor sets.
-- Hot-reload: `Renderer::reloadShader` must invalidate the dependent `VkPipelineCache` entries. Currently a shader reload leaves the cache pointing to a dangling `VkShader*` — fine while the old shader is still alive (they live in `Renderer::m_shaders`), but pipelines compiled against it are stale.
-- Optional: persist the driver-side `VkPipelineCache` to disk on shutdown, load on startup. Meaningful cold-start-time improvement.
+- **Hot-reload pipeline-cache invalidation — DONE**:
+  `IRendererBackend::invalidatePipelinesForShader(IShader&)` is a default
+  no-op virtual; `VkRendererBackend` overrides it to `vkDeviceWaitIdle()`
+  + `PipelineCache::invalidateForShader(VkShader*)`, which destroys every
+  cached pipeline whose key references the old shader. `Renderer::reloadShader`
+  calls it with the still-live old `IShader&` immediately before moving the
+  recompiled module into the slot. Unit-tested via `MockRendererBackend`
+  recording the invalidate calls.
+- **Outstanding**:
+  - Stress test: 1000+ drawIndexed per frame, no `OUT_OF_POOL_MEMORY`, no VMA fragmentation warnings.
+  - Long soak: 10-minute run, no leaked ImGui textures, no leaked descriptor sets.
+  - Optional: persist the driver-side `::VkPipelineCache` to disk on shutdown, load on startup. Meaningful cold-start-time improvement.
 
-**Effort:** medium — ~3–5 hours.
+**Effort:** medium — ~3–5 hours for the remaining items.
 
 ---
 
@@ -452,28 +496,27 @@ In chronological order on `main`:
 | 30 | `4158189` | Phase 4.7: rewrite IBL precompute on engine abstractions |
 | 31 | `9ebe04d` | Compile full demo on both backends (CMakeLists, ImGui init, shader locations) |
 | 32 | `9b91dc8` | Vulkan runtime fixes: endFrame frame-pending, mip transitions, RBO depth, RGB8 widening |
+| 33 | `ff691d3` | Doc: log IBL refactor + remaining Vulkan runtime work |
+| 34 | `9b8cd0a` | Vulkan validation fixes: depth layouts, push ranges, default texture, viewport |
+| 35 | `45d94be` | Fix Vulkan demo flicker: refcount renderer.beginFrame/endFrame |
+| 36 | `50dacf8` | Fix CameraUBO/LightsUBO race: route in-frame writes via vkCmdUpdateBuffer |
+| 37 | (this commit) | Phase 4.10 (partial): hot-reload pipeline-cache invalidation |
 
 ---
 
 ## 6. Cost estimate to finish
 
-Very rough, see the conversation log for reasoning. Ranges assume Opus-4.x pricing; Sonnet would be ~5× cheaper for mechanical work but risks architectural decisions on items 4.1, 4.3, 4.5.
+Very rough, see the conversation log for reasoning. Ranges assume Opus-4.x pricing; Sonnet would be ~5× cheaper for mechanical work.
+
+All of 4.1–4.8 are landed. The full demo runs on both backends. The
+hot-reload correctness fix from 4.10 is in. What's left is operational
+polish only:
 
 | Bucket | Remaining items | Hours | Opus USD | Mixed Opus + Sonnet |
 |---|---|---|---|---|
-| Ports | 4.4 (IBL shaders only — point_shadow already standard) | ~3 | $80–$200 | $30–$80 |
-| IBL | 4.7 | ~8 | $200–$500 | $80–$180 |
-| Build | full demo on Vulkan (CMakeLists.txt) + smoke test | ~2 | $50–$150 | $20–$60 |
-| Polish | 4.9, 4.10 | ~5 | $150–$300 | $60–$120 |
-| **Total** | | **~18** | **$480–$1,150** | **$190–$440** |
-
-Items 4.1, 4.2, 4.3, 4.5, 4.6, 4.8 are landed. The remaining majority is the
-IBL.h rewrite (item 4.7) — it's the last raw-GL holdout in the demo and the
-gating refactor for full demo parity on Vulkan.
-
-A "Vulkan demo at feature parity minus IBL" subset (skipping 4.7) is roughly
-$280–$650 Opus / $110–$260 mixed — likely the better stopping point for a
-tech demo, with sky/IBL falling back to a flat default cubemap.
+| MoltenVK polish | 4.9 docs/soak/HiDPI | ~2 | $50–$150 | $20–$60 |
+| Hardening | 4.10 stress + soak tests, optional disk pipeline cache | ~3 | $80–$200 | $30–$80 |
+| **Total** | | **~5** | **$130–$350** | **$50–$140** |
 
 ---
 
@@ -485,7 +528,7 @@ cmake -DSONNET_RENDERER_BACKEND=OpenGL -B build-gl
 cmake --build build-gl -j8
 ./build-gl/apps/demo/demo
 
-# Vulkan (minimal triangle + ImGui overlay via main_vk.cpp)
+# Vulkan (full demo, same source set as OpenGL)
 cmake -DSONNET_RENDERER_BACKEND=Vulkan -B build-vk
 cmake --build build-vk -j8
 ./build-vk/apps/demo/demo
@@ -495,12 +538,12 @@ cmake -B build
 cmake --build build -j8
 ./build/apps/demo/demo
 
-# Tests (9 suites on both backends)
+# Tests (one executable per module — 11 total — on both backends)
 (cd build-gl && ctest)
 (cd build-vk && ctest)
 ```
 
-Both `ctest` runs pass 9/9 green.
+Both `ctest` runs pass 11/11 green.
 
 ---
 
@@ -513,4 +556,4 @@ Both `ctest` runs pass 9/9 green.
 
 ---
 
-*Document maintained by the Vulkan backend feature chain. Last updated alongside commit `267afd4`.*
+*Document maintained by the Vulkan backend feature chain. Last updated alongside commit `5457afd` + the hot-reload pipeline-cache invalidation fix that follows it.*

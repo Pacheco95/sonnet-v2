@@ -79,6 +79,18 @@ PipelineCache::~PipelineCache() {
     if (m_vkCache != VK_NULL_HANDLE) vkDestroyPipelineCache(m_device.logical(), m_vkCache, nullptr);
 }
 
+void PipelineCache::invalidateForShader(const VkShader *shader) {
+    for (auto it = m_map.begin(); it != m_map.end(); ) {
+        if (it->first.shader == shader) {
+            if (it->second != VK_NULL_HANDLE)
+                vkDestroyPipeline(m_device.logical(), it->second, nullptr);
+            it = m_map.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 VkPipeline PipelineCache::getOrCreate(const VkShader &shader,
                                       const api::render::RenderState &state,
                                       const VkVertexInputState &vis,

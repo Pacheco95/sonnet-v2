@@ -74,6 +74,8 @@ public:
     void setUniform(UniformLocation location, const core::UniformValue &value) override;
     void drawIndexed(std::size_t indexCount)                                   override;
 
+    void invalidatePipelinesForShader(const api::render::IShader &shader)      override;
+
     // Factories
     [[nodiscard]] api::render::IShaderCompiler     &shaderCompiler()       override;
     [[nodiscard]] api::render::ITextureFactory     &textureFactory()       override;

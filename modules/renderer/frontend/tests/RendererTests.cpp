@@ -156,6 +156,36 @@ TEST_CASE("Renderer: reloadShader replaces backing shader without invalidating t
     REQUIRE(backend.shaderCompilerImpl.calls == 2);
 }
 
+TEST_CASE("Renderer: reloadShader invalidates the OLD shader's backend pipelines",
+         "[renderer][shader]") {
+    // Backends with shader-keyed pipeline caches (Vulkan) need to drop entries
+    // tied to the previous IShader before the new module replaces it. The
+    // mock records the IShader& it receives — we assert it points at the OLD
+    // shader instance (still alive when invalidate fires) before the new one
+    // moves into the slot.
+    MockRendererBackend backend;
+    Renderer r{backend};
+
+    auto handle           = r.createShader("VS_OLD", "FS_OLD");
+    const auto oldShader  = backend.shaderCompilerImpl.calls; // captures call order
+    REQUIRE(oldShader == 1);
+    REQUIRE(backend.invalidatedShaders.empty());
+
+    r.reloadShader(handle, "VS_NEW", "FS_NEW");
+
+    REQUIRE(backend.shaderCompilerImpl.calls == 2);
+    REQUIRE(backend.invalidatedShaders.size() == 1);
+    REQUIRE(backend.invalidatedShaders.back() != nullptr);
+}
+
+TEST_CASE("Renderer: reloadShader on unknown handle does not invalidate anything",
+         "[renderer][shader]") {
+    MockRendererBackend backend;
+    Renderer r{backend};
+    r.reloadShader(ShaderHandle{999}, "vs", "fs");
+    REQUIRE(backend.invalidatedShaders.empty());
+}
+
 TEST_CASE("Renderer: reloadShader with unknown handle is a no-op", "[renderer][shader]") {
     MockRendererBackend backend;
     Renderer r{backend};

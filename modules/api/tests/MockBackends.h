@@ -210,6 +210,7 @@ public:
     std::vector<render::DepthFunction>     depthFuncs{};
     std::vector<render::CullMode>          cullModes{};
     std::vector<bool>                      blendToggles{};
+    std::vector<const render::IShader *>   invalidatedShaders{};
 
     // Owned factories (constructed lazily on first reference).
     MockShaderCompiler       shaderCompilerImpl{};
@@ -248,6 +249,10 @@ public:
         uniformSets.push_back({loc, v});
     }
     void drawIndexed(std::size_t count) override { draws.push_back({count}); }
+
+    void invalidatePipelinesForShader(const render::IShader &s) override {
+        invalidatedShaders.push_back(&s);
+    }
 
     [[nodiscard]] render::IShaderCompiler       &shaderCompiler()      override { return shaderCompilerImpl; }
     [[nodiscard]] render::ITextureFactory       &textureFactory()      override { return textureFactoryImpl; }
