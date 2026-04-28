@@ -20,4 +20,9 @@ sonnet_add_module_test(sonnet_loaders
     tests/BoundsTests.cpp
     tests/ShaderLoaderTests.cpp
     tests/TextureLoaderTests.cpp
+    tests/ModelLoaderTests.cpp
+)
+
+target_compile_definitions(sonnet_loaders_tests PRIVATE
+    SONNET_LOADERS_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
 )
