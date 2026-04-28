@@ -88,6 +88,9 @@ inline std::array<glm::mat4, 6> captureViews() {
 // backend gates those on a pending command buffer. Wasteful on Vulkan (each
 // face presents the swapchain) but functionally correct for a startup-time
 // precompute. A future Phase 8 could add a one-shot path.
+//
+// Takes the RenderItem by value because Renderer::render() drains its queue
+// (queue.clear() at the end) — so we rebuild the queue per face here.
 inline void renderFace(sonnet::renderer::frontend::Renderer  &renderer,
                        sonnet::api::render::IRendererBackend &backend,
                        sonnet::core::RenderTargetHandle      rt,
@@ -96,7 +99,7 @@ inline void renderFace(sonnet::renderer::frontend::Renderer  &renderer,
                        std::uint32_t                          mipSize,
                        const glm::mat4                       &view,
                        const glm::mat4                       &proj,
-                       std::vector<sonnet::api::render::RenderItem> &queue) {
+                       sonnet::api::render::RenderItem        item) {
     renderer.selectCubemapFace(rt, face, mipLevel);
 
     sonnet::api::render::FrameContext ctx{
@@ -107,6 +110,7 @@ inline void renderFace(sonnet::renderer::frontend::Renderer  &renderer,
         .viewportHeight   = mipSize,
         .deltaTime        = 0.0f,
     };
+    std::vector<sonnet::api::render::RenderItem> queue{std::move(item)};
     renderer.beginFrame();
     renderer.bindRenderTarget(rt);
     backend.setViewport(mipSize, mipSize);
@@ -211,16 +215,14 @@ inline IBLMaps buildIBL(sonnet::renderer::frontend::Renderer  &renderer,
         .isCubemap = true,
         .mipLevels = 1,
     });
-    {
-        std::vector<RenderItem> q{{
+    for (std::uint32_t face = 0; face < 6; ++face) {
+        RenderItem item{
             .mesh        = cubeHandle,
             .material    = envMat,
             .modelMatrix = glm::mat4{1.0f},
-        }};
-        for (std::uint32_t face = 0; face < 6; ++face) {
-            renderFace(renderer, backend, envCubeRT, face, 0, ENV_SIZE,
-                        VIEWS[face], PROJ, q);
-        }
+        };
+        renderFace(renderer, backend, envCubeRT, face, 0, ENV_SIZE,
+                    VIEWS[face], PROJ, std::move(item));
     }
     const auto envCubeHandle = renderer.colorTextureHandle(envCubeRT, 0);
 
@@ -248,16 +250,14 @@ inline IBLMaps buildIBL(sonnet::renderer::frontend::Renderer  &renderer,
         .isCubemap = true,
         .mipLevels = 1,
     });
-    {
-        std::vector<RenderItem> q{{
+    for (std::uint32_t face = 0; face < 6; ++face) {
+        RenderItem item{
             .mesh        = cubeHandle,
             .material    = irradMat,
             .modelMatrix = glm::mat4{1.0f},
-        }};
-        for (std::uint32_t face = 0; face < 6; ++face) {
-            renderFace(renderer, backend, irradCubeRT, face, 0, IRRAD_SIZE,
-                        VIEWS[face], PROJ, q);
-        }
+        };
+        renderFace(renderer, backend, irradCubeRT, face, 0, IRRAD_SIZE,
+                    VIEWS[face], PROJ, std::move(item));
     }
     const auto irradianceHandle = renderer.colorTextureHandle(irradCubeRT, 0);
 
@@ -290,15 +290,15 @@ inline IBLMaps buildIBL(sonnet::renderer::frontend::Renderer  &renderer,
         preMat.addTexture("uEnvMap", envCubeHandle);
         preMat.set("uRoughness", roughness);
 
-        std::vector<RenderItem> q{{
-            .mesh        = cubeHandle,
-            .material    = preMat,
-            .modelMatrix = glm::mat4{1.0f},
-        }};
         for (std::uint32_t face = 0; face < 6; ++face) {
+            RenderItem item{
+                .mesh        = cubeHandle,
+                .material    = preMat,
+                .modelMatrix = glm::mat4{1.0f},
+            };
             renderFace(renderer, backend, prefilterRT, face,
                         static_cast<std::uint32_t>(mip), mipSize,
-                        VIEWS[face], PROJ, q);
+                        VIEWS[face], PROJ, std::move(item));
         }
     }
     const auto prefilteredHandle = renderer.colorTextureHandle(prefilterRT, 0);

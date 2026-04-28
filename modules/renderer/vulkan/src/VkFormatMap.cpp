@@ -9,7 +9,10 @@ VkFormat toVkFormat(api::render::TextureFormat fmt, api::render::ColorSpace colo
     using C = api::render::ColorSpace;
     const bool srgb = (colorSpace == C::sRGB);
     switch (fmt) {
-        case F::RGB8:    return srgb ? VK_FORMAT_R8G8B8_SRGB   : VK_FORMAT_R8G8B8_UNORM;
+        // 3-channel 8-bit isn't required by Vulkan core and is missing on
+        // MoltenVK / Apple Silicon. Widen to RGBA8 (consumers must provide
+        // 4-channel pixel data — see CPUTextureBuffer staging).
+        case F::RGB8:    return srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
         case F::RGBA8:   return srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
         case F::RGBA16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
         case F::RGBA32F: return VK_FORMAT_R32G32B32A32_SFLOAT;

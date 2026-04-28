@@ -58,14 +58,11 @@ VkRenderTarget::VkRenderTarget(Device &device, SamplerCache &samplers, BindState
                                                api::render::DepthAttachment,
                                                m_isCubemap, m_mipLevels);
             m_depth = std::make_unique<VkTexture2D>(device, samplers, bindState, dd, td->samplerDesc);
-        } else if (m_isCubemap) {
-            // RenderBufferDesc on cubemap RT: allocate per-mip 2D depth
-            // images, shared across the 6 faces of each mip. These are
-            // attachment-only (not sampled). Build below.
-            m_hasRenderbufferDepth = true;
         } else {
-            throw VulkanError("VkRenderTarget: RenderBufferDesc depth on non-cubemap RT "
-                              "not implemented (use TextureAttachmentDesc).");
+            // RenderBufferDesc: non-sampled attachment-only depth image.
+            // Cubemap RT allocates per-mip in buildCubemapFramebuffers; the
+            // 2D path allocates a single image+view in buildFramebuffer.
+            m_hasRenderbufferDepth = true;
         }
     }
 
@@ -317,10 +314,55 @@ void VkRenderTarget::buildRenderPass() {
 }
 
 void VkRenderTarget::buildFramebuffer() {
+    // 2D path: optionally allocate a single non-sampled depth image when the
+    // user requested RenderBufferDesc depth. Stored in the same per-mip
+    // vectors as the cubemap path (with mipLevels=1) so the destructor can
+    // clean both paths uniformly.
+    if (m_hasRenderbufferDepth) {
+        const VkFormat depthFormat = toVkFormat(api::render::TextureFormat::Depth24,
+                                                 api::render::ColorSpace::Linear);
+        m_renderbufferDepthImages.resize(1, VK_NULL_HANDLE);
+        m_renderbufferDepthAllocs.resize(1, VK_NULL_HANDLE);
+        m_renderbufferDepthViews.resize(1, VK_NULL_HANDLE);
+
+        VkImageCreateInfo info{};
+        info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        info.imageType     = VK_IMAGE_TYPE_2D;
+        info.format        = depthFormat;
+        info.extent        = {m_width, m_height, 1};
+        info.mipLevels     = 1;
+        info.arrayLayers   = 1;
+        info.samples       = VK_SAMPLE_COUNT_1_BIT;
+        info.tiling        = VK_IMAGE_TILING_OPTIMAL;
+        info.usage         = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
+        info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VK_CHECK(vmaCreateImage(m_device.allocator(), &info, &allocInfo,
+                                 &m_renderbufferDepthImages[0],
+                                 &m_renderbufferDepthAllocs[0], nullptr));
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image    = m_renderbufferDepthImages[0];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format   = depthFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        VK_CHECK(vkCreateImageView(m_device.logical(), &viewInfo, nullptr,
+                                    &m_renderbufferDepthViews[0]));
+    }
+
     std::vector<VkImageView> views;
     views.reserve(m_colors.size() + 1);
     for (const auto &c : m_colors) views.push_back(c->imageView());
-    if (m_depth) views.push_back(m_depth->imageView());
+    if (m_depth) {
+        views.push_back(m_depth->imageView());
+    } else if (m_hasRenderbufferDepth) {
+        views.push_back(m_renderbufferDepthViews[0]);
+    }
 
     VkFramebufferCreateInfo info{};
     info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;

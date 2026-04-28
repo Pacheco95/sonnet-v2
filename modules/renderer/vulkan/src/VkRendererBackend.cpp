@@ -210,13 +210,14 @@ void VkRendererBackend::beginFrame() {
 
 void VkRendererBackend::endFrame() {
     if (!m_framePending) return; // e.g. minimized or acquire returned OUT_OF_DATE.
-    m_framePending = false;
 
     auto &frame = m_commandContext->current();
 
     // If the user never bound the default RT before endFrame (or never drew
     // anywhere), fold to the swapchain pass so the swapchain image transitions
     // to PRESENT_SRC. ensurePassActive begins it; it'll be ended below.
+    // m_framePending stays true until after the inline ensurePassActive so
+    // that helper isn't tripped by its own "frame not pending" guard.
     if (m_passActive && m_pending.renderPass != m_swapchain->defaultRenderPass()) {
         // An offscreen pass is recording; end it and switch to the default RT.
         vkCmdEndRenderPass(frame.cmd);
@@ -233,7 +234,8 @@ void VkRendererBackend::endFrame() {
         ensurePassActive();
     }
     vkCmdEndRenderPass(frame.cmd);
-    m_passActive = false;
+    m_passActive   = false;
+    m_framePending = false;
     VK_CHECK(vkEndCommandBuffer(frame.cmd));
 
     // renderFinished is per-swapchain-image (owned by Swapchain) so that with

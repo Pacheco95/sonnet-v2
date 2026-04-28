@@ -1,6 +1,6 @@
 #version 460 core
 layout(location = 0) in vec2 vUV;
-out vec4 fragColor;
+layout(location = 0) out vec4 fragColor;
 
 // ── G-buffer inputs + shadow maps + IBL — all in set=1 ────────────────────────
 // Array bindings (uShadowMaps[3], uPointShadowMaps[4]) will compile under both

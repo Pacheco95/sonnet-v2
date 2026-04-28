@@ -115,8 +115,15 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     VK_CHECK(vmaCreateImage(device.allocator(), &info, &allocInfo, &m_image, &m_alloc, nullptr));
 
-    // Staging buffer with the CPU data.
-    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(data.texels.size());
+    // Staging buffer. RGB8 widens to RGBA8 on Vulkan (3-channel formats
+    // aren't required by core spec and are missing on MoltenVK), so when the
+    // engine format is RGB8 we expand the per-pixel byte count to 4 and pad
+    // alpha to 0xFF before the staging memcpy.
+    const bool widenRgbToRgba = (desc.format == api::render::TextureFormat::RGB8);
+    const std::size_t pixelCount = static_cast<std::size_t>(desc.size.x) * desc.size.y;
+    const VkDeviceSize byteSize = widenRgbToRgba
+        ? static_cast<VkDeviceSize>(pixelCount * 4)
+        : static_cast<VkDeviceSize>(data.texels.size());
     VkBufferCreateInfo bufInfo{};
     bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufInfo.size  = byteSize;
@@ -130,7 +137,18 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
     VmaAllocationInfo stagingInfo{};
     VK_CHECK(vmaCreateBuffer(device.allocator(), &bufInfo, &bufAlloc,
                              &staging, &stagingAlloc, &stagingInfo));
-    std::memcpy(stagingInfo.pMappedData, data.texels.data(), byteSize);
+    if (widenRgbToRgba) {
+        const auto *src = data.texels.data();
+        auto *dst = static_cast<std::uint8_t *>(stagingInfo.pMappedData);
+        for (std::size_t i = 0; i < pixelCount; ++i) {
+            dst[i * 4 + 0] = static_cast<std::uint8_t>(src[i * 3 + 0]);
+            dst[i * 4 + 1] = static_cast<std::uint8_t>(src[i * 3 + 1]);
+            dst[i * 4 + 2] = static_cast<std::uint8_t>(src[i * 3 + 2]);
+            dst[i * 4 + 3] = 0xFF;
+        }
+    } else {
+        std::memcpy(stagingInfo.pMappedData, data.texels.data(), byteSize);
+    }
 
     device.runOneShot([&](VkCommandBuffer cmd) {
         transitionImageLayout(cmd, m_image,
@@ -343,7 +361,7 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
         transitionImageLayout(cmd, m_image,
                               VK_IMAGE_LAYOUT_UNDEFINED,
                               initialLayout,
-                              aspect, 1, m_layerCount);
+                              aspect, m_mipLevels, m_layerCount);
     });
 
     VkImageViewCreateInfo viewInfo{};
