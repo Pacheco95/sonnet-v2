@@ -197,6 +197,11 @@ void VkRendererBackend::beginFrame() {
     // as pending. Nothing is recorded until the first drawIndexed (or the
     // user binds another RT). This is the deferred-pass model from plan §6.
     m_bindState->reset();
+    // Expose the per-frame command buffer to BindState so VkGpuBuffer::update
+    // can route UBO writes through vkCmdUpdateBuffer (serialized with command
+    // execution) instead of host memcpy. Set after reset() above so it isn't
+    // wiped, and cleared in endFrame.
+    m_bindState->currentCmd = frame.cmd;
     m_pending = {};
     m_pending.renderPass  = m_swapchain->defaultRenderPass();
     m_pending.framebuffer = m_swapchain->framebuffer(imageIx);
@@ -204,6 +209,7 @@ void VkRendererBackend::beginFrame() {
     m_pending.colorCount  = 1;
     m_pending.hasDepth    = true;
     m_passActive = false;
+    m_bindState->passActive = false;
 
     m_framePending = true;
 }
@@ -222,6 +228,7 @@ void VkRendererBackend::endFrame() {
         // An offscreen pass is recording; end it and switch to the default RT.
         vkCmdEndRenderPass(frame.cmd);
         m_passActive = false;
+    m_bindState->passActive = false;
         m_pending = {};
         m_pending.renderPass  = m_swapchain->defaultRenderPass();
         m_pending.framebuffer = m_swapchain->framebuffer(m_pendingImageIndex);
@@ -236,6 +243,7 @@ void VkRendererBackend::endFrame() {
     vkCmdEndRenderPass(frame.cmd);
     m_passActive   = false;
     m_framePending = false;
+    m_bindState->currentCmd = VK_NULL_HANDLE; // mirrors the begin-frame setup.
     VK_CHECK(vkEndCommandBuffer(frame.cmd));
 
     // renderFinished is per-swapchain-image (owned by Swapchain) so that with
@@ -293,6 +301,7 @@ void VkRendererBackend::bindDefaultRenderTarget() {
     if (m_passActive) {
         vkCmdEndRenderPass(m_commandContext->current().cmd);
         m_passActive = false;
+    m_bindState->passActive = false;
     }
     m_pending = {};
     m_pending.renderPass  = m_swapchain->defaultRenderPass();
@@ -315,6 +324,7 @@ void VkRendererBackend::bindRenderTarget(const api::render::IRenderTarget &targe
     if (m_passActive) {
         vkCmdEndRenderPass(m_commandContext->current().cmd);
         m_passActive = false;
+    m_bindState->passActive = false;
     }
     m_pending = {};
     m_pending.renderPass  = vkRT->renderPass();
@@ -369,7 +379,8 @@ void VkRendererBackend::ensurePassActive() {
     scissor.extent = m_pending.extent;
     vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
 
-    m_passActive       = true;
+    m_passActive            = true;
+    m_bindState->passActive = true;
     m_activeRenderPass = m_pending.renderPass;
     m_activeColorCount = m_pending.colorCount;
     m_activeHasDepth   = m_pending.hasDepth;

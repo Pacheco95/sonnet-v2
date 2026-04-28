@@ -30,6 +30,26 @@ struct BindState {
     VkBuffer                              currentVertex = VK_NULL_HANDLE;
     VkBuffer                              currentIndex  = VK_NULL_HANDLE;
     VkIndexType                           indexType     = VK_INDEX_TYPE_UINT32;
+
+    // Active per-frame command buffer. Set by VkRendererBackend::beginFrame
+    // and cleared in endFrame. VkGpuBuffer::update uses this to record
+    // vkCmdUpdateBuffer (serialized with command-buffer execution) instead
+    // of a host memcpy — necessary because the engine reuses single
+    // CameraUBO/LightsUBO buffers across many passes per frame, and a host
+    // memcpy makes every draw read the LAST write at GPU execute time
+    // rather than the value that was current when its pass was recorded.
+    VkCommandBuffer                       currentCmd    = VK_NULL_HANDLE;
+
+    // Mirror of VkRendererBackend::m_passActive set by ensurePassActive /
+    // bindRenderTarget / endFrame. VkGpuBuffer::update consults this to
+    // decide whether vkCmdUpdateBuffer is currently legal (only outside a
+    // render pass per spec). Inside a pass the update is dropped and the
+    // last-written value persists — the demo's only multi-render-per-pass
+    // pattern (deferred + sky + outline composite into hdrRT) feeds the
+    // same scene camera matrix to each render() call, so dropping the
+    // duplicate write is functionally equivalent. A future Phase-8 ring
+    // buffer would let updates inside passes target a fresh slot.
+    bool                                  passActive    = false;
     std::array<VkBuffer, kMaxUboBindings> ubos{};
     std::array<VkDeviceSize, kMaxUboBindings> uboSizes{};
 
@@ -61,6 +81,8 @@ struct BindState {
     void reset() {
         currentVertex      = VK_NULL_HANDLE;
         currentIndex       = VK_NULL_HANDLE;
+        currentCmd         = VK_NULL_HANDLE;
+        passActive         = false;
         currentShader      = nullptr;
         currentVertexInput = nullptr;
         ubos.fill(VK_NULL_HANDLE);

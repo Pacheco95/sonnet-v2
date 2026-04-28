@@ -17,7 +17,12 @@ VkBufferUsageFlags usageFor(api::render::BufferType type) {
         case api::render::BufferType::Index:
             return VK_BUFFER_USAGE_INDEX_BUFFER_BIT  | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         case api::render::BufferType::Uniform:
-            return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            // TRANSFER_DST so update() can route through vkCmdUpdateBuffer
+            // (serialized with the active command buffer) — required because
+            // the engine binds a single CameraUBO/LightsUBO across many
+            // passes per frame and a host memcpy would let later passes'
+            // matrices overwrite earlier ones at GPU execution time.
+            return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     }
     return 0;
 }
@@ -118,6 +123,49 @@ void VkGpuBuffer::update(const void *data, std::size_t size) {
     }
     if (size > m_size) {
         throw VulkanError("VkGpuBuffer::update size exceeds buffer capacity");
+    }
+
+    // Inside a frame, route the write through vkCmdUpdateBuffer so it
+    // serializes with the surrounding draws in command-buffer order. With a
+    // single shared UBO across many passes per frame, a host memcpy would
+    // otherwise let later passes' writes overwrite the data earlier passes'
+    // recorded draws would read at GPU execution time.
+    //
+    // vkCmdUpdateBuffer is illegal inside an active render pass (Vulkan spec
+    // VUID-vkCmdUpdateBuffer-renderpass). The demo's deferred-pass model
+    // does have one in-pass multi-render pattern: PostProcess.cpp's hdrRT
+    // pass renders the deferred quad, then sky, then the outline composite
+    // back-to-back without re-binding. Each of those uses the same scene
+    // FrameContext, so the UBO write would be a duplicate; dropping it is
+    // functionally equivalent. A future Phase-8 ring buffer (ringed UBO
+    // slots per pass) would let in-pass updates land on a fresh slot
+    // instead of being skipped. Until then, this is the cheapest correct
+    // behaviour.
+    if (m_bindState.currentCmd != VK_NULL_HANDLE && !m_bindState.passActive) {
+        // Spec requires size to be a multiple of 4 and <= 65536. Sonnet's
+        // UBOs are naturally 16-byte aligned (std140) and well under 64 KB,
+        // so the guard is a sanity check.
+        if ((size % 4) != 0 || size > 65536) {
+            throw VulkanError("VkGpuBuffer::update size unsupported by vkCmdUpdateBuffer "
+                              "(must be multiple of 4 and <= 65536)");
+        }
+        vkCmdUpdateBuffer(m_bindState.currentCmd, m_buffer, 0,
+                          static_cast<VkDeviceSize>(size), data);
+        return;
+    }
+    if (m_bindState.currentCmd != VK_NULL_HANDLE && m_bindState.passActive) {
+        // In-pass write: drop and rely on the previous out-of-pass update.
+        // (See comment above — only safe because the demo's same-RT renders
+        // share the FrameContext across calls.)
+        return;
+    }
+
+    // Out of frame (init-time fill, e.g. main_vk.cpp's static UBO): host
+    // memcpy into the persistently-mapped allocation. This path is also
+    // taken if a caller bypasses the engine's frame lifecycle.
+    if (m_mapped == nullptr) {
+        throw VulkanError("VkGpuBuffer::update outside a frame requires a host-mapped "
+                          "buffer (allocate-only ctor with HOST access)");
     }
     std::memcpy(m_mapped, data, size);
 }
