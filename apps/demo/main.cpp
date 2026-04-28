@@ -430,5 +430,15 @@ int main() {
         input.nextFrame();
     }
 
+#if defined(SONNET_USE_VULKAN)
+    // prepareForShutdown waits idle and tears down the per-frame command
+    // pools so all the engine resources (textures, RTs, pipelines, ImGui
+    // descriptors) can destruct cleanly in any order on the way out.
+    {
+        auto *vkBackend = static_cast<sonnet::renderer::vulkan::VkRendererBackend *>(backendPtr.get());
+        vkBackend->prepareForShutdown();
+    }
+#endif
+
     return 0;
 }

@@ -252,10 +252,12 @@ void VkRenderTarget::buildRenderPass() {
 
     if (m_depth || m_hasRenderbufferDepth) {
         VkAttachmentDescription a{};
-        // RenderBufferDesc depth uses VK_FORMAT_D24_UNORM_S8_UINT to match the
-        // engine's TextureFormat::Depth24 — VkTexture2D's allocate-only ctor
-        // would have used the same. (MoltenVK silently substitutes
-        // D32_SFLOAT_S8_UINT if D24 isn't supported.)
+        // TextureAttachmentDesc depth is sampled downstream (CSM, picking,
+        // etc.) so its final layout must be SHADER_READ_ONLY_OPTIMAL —
+        // otherwise the lighting pass's vkUpdateDescriptorSets sees the
+        // image still in DEPTH_STENCIL_ATTACHMENT and validation rejects
+        // the descriptor write. RenderBufferDesc depth is non-sampled, so
+        // it stays in DEPTH_STENCIL_ATTACHMENT_OPTIMAL across pass instances.
         a.format         = m_depth ? m_depth->format()
                                    : toVkFormat(api::render::TextureFormat::Depth24,
                                                 api::render::ColorSpace::Linear);
@@ -266,8 +268,12 @@ void VkRenderTarget::buildRenderPass() {
                               : VK_ATTACHMENT_STORE_OP_STORE;
         a.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        a.initialLayout  = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        a.finalLayout    = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        a.initialLayout  = m_depth
+                              ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                              : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        a.finalLayout    = m_depth
+                              ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                              : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         depthRef = {static_cast<std::uint32_t>(attachments.size()),
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
         attachments.push_back(a);
@@ -353,6 +359,28 @@ void VkRenderTarget::buildFramebuffer() {
         viewInfo.subresourceRange.layerCount = 1;
         VK_CHECK(vkCreateImageView(m_device.logical(), &viewInfo, nullptr,
                                     &m_renderbufferDepthViews[0]));
+
+        // Transition UNDEFINED -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL so the
+        // render-pass initialLayout matches on first use.
+        m_device.runOneShot([&](VkCommandBuffer cmd) {
+            VkImageMemoryBarrier b{};
+            b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image                           = m_renderbufferDepthImages[0];
+            b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+            b.subresourceRange.levelCount     = 1;
+            b.subresourceRange.layerCount     = 1;
+            b.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout                       = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            b.srcAccessMask                   = 0;
+            b.dstAccessMask                   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                                              | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                0, 0, nullptr, 0, nullptr, 1, &b);
+        });
     }
 
     std::vector<VkImageView> views;
@@ -431,6 +459,31 @@ void VkRenderTarget::buildCubemapFramebuffers() {
             VK_CHECK(vkCreateImageView(m_device.logical(), &viewInfo, nullptr,
                                         &m_renderbufferDepthViews[mip]));
         }
+
+        // Transition all renderbuffer depths from UNDEFINED to
+        // DEPTH_STENCIL_ATTACHMENT_OPTIMAL so the render pass's matching
+        // initialLayout is satisfied on first invocation.
+        m_device.runOneShot([&](VkCommandBuffer cmd) {
+            for (auto img : m_renderbufferDepthImages) {
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image                           = img;
+                b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+                b.subresourceRange.levelCount     = 1;
+                b.subresourceRange.layerCount     = 1;
+                b.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout                       = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                b.srcAccessMask                   = 0;
+                b.dstAccessMask                   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+                                                  | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                vkCmdPipelineBarrier(cmd,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                    0, 0, nullptr, 0, nullptr, 1, &b);
+            }
+        });
     }
 
     auto makeFaceView = [&](VkImage image, VkFormat fmt, VkImageAspectFlags aspect,

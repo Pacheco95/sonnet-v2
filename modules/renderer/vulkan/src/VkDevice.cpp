@@ -184,13 +184,33 @@ void Device::createLogicalDevice() {
     VkPhysicalDeviceFeatures features{};
     features.samplerAnisotropy = VK_TRUE;
 
+    // Portability_subset features must be explicitly opted into via
+    // VkPhysicalDeviceFeatures2.pNext at device creation. Without this,
+    // sampler2DShadow comparison samplers (CSM PCF) trip portability
+    // validation even when the implementation reports support.
+    VkPhysicalDevicePortabilitySubsetFeaturesKHR portFeatures{};
+    portFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR;
+    if (m_portabilitySubsetEnabled) {
+        // Re-query and forward the values we depend on.
+        VkPhysicalDeviceFeatures2 query{};
+        query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        query.pNext = &portFeatures;
+        vkGetPhysicalDeviceFeatures2(m_physical, &query);
+    }
+
+    VkPhysicalDeviceFeatures2 feats2{};
+    feats2.sType    = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    feats2.features = features;
+    feats2.pNext    = m_portabilitySubsetEnabled ? &portFeatures : nullptr;
+
     VkDeviceCreateInfo info{};
     info.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     info.queueCreateInfoCount    = static_cast<std::uint32_t>(queueInfos.size());
     info.pQueueCreateInfos       = queueInfos.data();
     info.enabledExtensionCount   = static_cast<std::uint32_t>(extensions.size());
     info.ppEnabledExtensionNames = extensions.data();
-    info.pEnabledFeatures        = &features;
+    // pEnabledFeatures must be NULL when pNext chains in PhysicalDeviceFeatures2.
+    info.pNext                   = &feats2;
 
     VK_CHECK(vkCreateDevice(m_physical, &info, nullptr, &m_device));
 

@@ -121,7 +121,7 @@ void VkRendererBackend::initialize() {
     m_renderTargetFactory = std::make_unique<VkRenderTargetFactory>(*m_device, *m_samplerCache, *m_bindState);
     m_gpuMeshFactory      = std::make_unique<VkGpuMeshFactory>(*this);
     m_pipelineCache       = std::make_unique<PipelineCache>(*m_device);
-    m_descriptorManager   = std::make_unique<DescriptorManager>(*m_device, *m_bindState);
+    m_descriptorManager   = std::make_unique<DescriptorManager>(*m_device, *m_samplerCache, *m_bindState);
     // 2 MiB per frame is comfortable for per-draw UBOs in a demo-scale scene;
     // UniformRing aligns to minUniformBufferOffsetAlignment internally.
     m_uniformRing         = std::make_unique<UniformRing>(*m_device, 2u * 1024u * 1024u);
@@ -350,6 +350,25 @@ void VkRendererBackend::ensurePassActive() {
     rp.pClearValues      = clears.data();
     vkCmdBeginRenderPass(frame.cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
+    // Default viewport + scissor to the render pass's full extent. Pipelines
+    // declare both as dynamic state so we must call setViewport/setScissor
+    // at least once per command buffer; doing it here means a caller that
+    // skips backend.setViewport (because they're rendering "the whole RT")
+    // doesn't trip validation. backend.setViewport overrides this default.
+    VkViewport vp{};
+    vp.x        = 0.0f;
+    vp.y        = 0.0f;
+    vp.width    = static_cast<float>(m_pending.extent.width);
+    vp.height   = static_cast<float>(m_pending.extent.height);
+    vp.minDepth = 0.0f;
+    vp.maxDepth = 1.0f;
+    vkCmdSetViewport(frame.cmd, 0, 1, &vp);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = m_pending.extent;
+    vkCmdSetScissor(frame.cmd, 0, 1, &scissor);
+
     m_passActive       = true;
     m_activeRenderPass = m_pending.renderPass;
     m_activeColorCount = m_pending.colorCount;
@@ -533,14 +552,23 @@ void VkRendererBackend::drawIndexed(std::size_t indexCount) {
     }
 
     // Flush push constants for any uniform writes that happened since the
-    // last draw. Union of stage flags from reflection.
-    if (m_bindState->pushConstantDirtyEnd > 0 &&
-        !shader->reflection().pushConstantRanges.empty()) {
-        VkShaderStageFlags stages = 0;
-        for (const auto &r : shader->reflection().pushConstantRanges) stages |= r.stageFlags;
-        vkCmdPushConstants(frame.cmd, shader->pipelineLayout(), stages,
-                            0, m_bindState->pushConstantDirtyEnd,
-                            m_bindState->pushConstantStaging.data());
+    // last draw. Vulkan validation rejects a single vkCmdPushConstants whose
+    // (offset, size, stageFlags) tuple isn't fully covered by one or more
+    // matching ranges in the pipeline layout, so emit one call per
+    // declared range — each carries that range's exact (offset, size,
+    // stageFlags). Skip ranges entirely past the dirty hwm so a draw that
+    // only wrote vertex-stage push data doesn't emit a stale fragment-stage
+    // push.
+    if (m_bindState->pushConstantDirtyEnd > 0) {
+        for (const auto &r : shader->reflection().pushConstantRanges) {
+            if (r.offset >= m_bindState->pushConstantDirtyEnd) continue;
+            const std::uint32_t end =
+                std::min(r.offset + r.size, m_bindState->pushConstantDirtyEnd);
+            const std::uint32_t writeSize = end - r.offset;
+            vkCmdPushConstants(frame.cmd, shader->pipelineLayout(), r.stageFlags,
+                                r.offset, writeSize,
+                                m_bindState->pushConstantStaging.data() + r.offset);
+        }
     }
 
     const VkBuffer     vbo       = m_bindState->currentVertex;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
 #include <array>
@@ -9,6 +10,7 @@
 namespace sonnet::renderer::vulkan {
 
 class Device;
+class SamplerCache;
 class VkShader;
 struct BindState;
 
@@ -24,7 +26,7 @@ class DescriptorManager {
 public:
     static constexpr std::uint32_t kFramesInFlight = 2;
 
-    DescriptorManager(Device &device, BindState &bindState);
+    DescriptorManager(Device &device, SamplerCache &samplerCache, BindState &bindState);
     ~DescriptorManager();
 
     DescriptorManager(const DescriptorManager &)            = delete;
@@ -52,11 +54,23 @@ public:
                                         VkDeviceSize range);
 
 private:
-    Device    &m_device;
-    BindState &m_bindState;
+    Device       &m_device;
+    SamplerCache &m_samplerCache;
+    BindState    &m_bindState;
 
     std::array<VkDescriptorPool, kFramesInFlight> m_pools{};
     std::uint32_t                                 m_currentFrame = 0;
+
+    // 1x1 white texture used as a fallback when a material doesn't bind a
+    // texture for a given material-set binding (e.g. uEmissive on a
+    // non-emissive material). Without this, validation rejects the draw
+    // because the shader reads from a never-updated descriptor.
+    VkImage       m_defaultImage     = VK_NULL_HANDLE;
+    VmaAllocation m_defaultAlloc     = VK_NULL_HANDLE;
+    VkImageView   m_defaultImageView = VK_NULL_HANDLE;
+    VkSampler     m_defaultSampler   = VK_NULL_HANDLE; // borrowed; cached by SamplerCache.
+
+    void buildDefaultTexture();
 };
 
 } // namespace sonnet::renderer::vulkan

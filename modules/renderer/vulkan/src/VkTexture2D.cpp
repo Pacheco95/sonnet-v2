@@ -351,16 +351,17 @@ VkTexture2D::VkTexture2D(Device &device, SamplerCache &samplers, BindState &bind
         ? VK_IMAGE_ASPECT_DEPTH_BIT
         : VK_IMAGE_ASPECT_COLOR_BIT;
 
-    // Transition to SHADER_READ_ONLY for color, DEPTH_STENCIL_ATTACHMENT for depth.
-    // Render-pass begin will transition back to the attachment-optimal layout.
-    const VkImageLayout initialLayout = m_isDepth
-        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
+    // Both color and TextureAttachmentDesc depth attachments are sampled
+    // downstream (depth by CSM/picking; color by post-process). Transition to
+    // SHADER_READ_ONLY_OPTIMAL on creation so the render-pass initialLayout
+    // (also SHADER_READ_ONLY_OPTIMAL) sees the image in the expected state on
+    // its first invocation. The pass's attachment reference layout flips it
+    // to (DEPTH_STENCIL|COLOR)_ATTACHMENT_OPTIMAL while drawing, then the
+    // finalLayout takes it back to SHADER_READ_ONLY for the next sampler use.
     device.runOneShot([&](VkCommandBuffer cmd) {
         transitionImageLayout(cmd, m_image,
                               VK_IMAGE_LAYOUT_UNDEFINED,
-                              initialLayout,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                               aspect, m_mipLevels, m_layerCount);
     });
 
