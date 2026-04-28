@@ -194,11 +194,12 @@ std::array<std::uint8_t, 4> Renderer::readPixelRGBA8(
 }
 
 void Renderer::beginFrame() {
-    m_backend.beginFrame();
+    if (m_frameRefCount++ == 0) m_backend.beginFrame();
 }
 
 void Renderer::endFrame() {
-    m_backend.endFrame();
+    if (m_frameRefCount == 0) return; // defensive: unbalanced call.
+    if (--m_frameRefCount == 0) m_backend.endFrame();
 }
 
 void Renderer::render(const FrameContext &ctx, std::vector<RenderItem> &queue) {

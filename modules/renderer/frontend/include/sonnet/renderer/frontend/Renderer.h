@@ -97,6 +97,13 @@ private:
     api::render::IRendererBackend   &m_backend;
     api::render::RenderOverrides    *m_overrides = nullptr;
 
+    // Reference count over begin/end frame nesting. The outermost pair is the
+    // only one that calls into the backend's frame lifecycle (which on Vulkan
+    // means an actual swapchain acquire+present); inner pairs from helpers
+    // like ShadowMaps/PostProcess just balance the counter so the demo's
+    // OpenGL-style "every subsystem wraps its work" pattern stays valid.
+    unsigned m_frameRefCount = 0;
+
     std::unique_ptr<api::render::IGpuBuffer> m_cameraUBO;
     std::unique_ptr<api::render::IGpuBuffer> m_lightsUBO;
 

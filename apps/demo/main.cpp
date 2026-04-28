@@ -234,6 +234,13 @@ int main() {
 
         window.pollEvents();
 
+        // Outermost begin/end frame pair. Helpers (ShadowMaps, PostProcess,
+        // EditorUI picking) each call renderer.beginFrame/endFrame internally
+        // — those nest under this pair via Renderer's refcount, so on the
+        // Vulkan path only ONE swapchain acquire/present happens per
+        // application frame instead of one per subsystem.
+        renderer.beginFrame();
+
         // ── Shader + script hot-reload (0.5 s poll via registry) ─────────────
         if (const auto msg = registry.tick(dt); !msg.empty()) {
             shaderReloadMsg      = msg;
@@ -426,6 +433,18 @@ int main() {
         ui.draw(ep);
 
         imgui.end();
+
+#if defined(SONNET_USE_VULKAN)
+        // The Vulkan ImGui backend doesn't auto-draw on imgui.end() — it
+        // needs an explicit call into the active swapchain pass. The OpenGL
+        // path handles this implicitly via imgui_impl_opengl3 inside
+        // imgui.end(), so the call is gated to the Vulkan build.
+        static_cast<sonnet::renderer::vulkan::VkRendererBackend *>(
+            backendPtr.get())->renderImGui();
+#endif
+
+        renderer.endFrame();   // outer endFrame: backend.endFrame submits + presents.
+
         window.swapBuffers();
         input.nextFrame();
     }
