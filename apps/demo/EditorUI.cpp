@@ -212,7 +212,16 @@ void EditorUI::drawViewportPanel(EditorParams &p) {
 
     m_viewportFocused = ImGui::IsWindowFocused() || ImGui::IsWindowHovered();
     const ImVec2 sz = ImGui::GetContentRegionAvail();
+    // OpenGL framebuffers have origin at the bottom-left, ImGui at the top-left,
+    // so the GL build samples the texture with V flipped (uv0=(0,1), uv1=(1,0)).
+    // Vulkan framebuffers already use top-left origin (and the engine's
+    // projection helper applies the clip-space Y flip on the rendering side),
+    // so the Vulkan build needs the natural UVs to display right-side-up.
+#if defined(SONNET_USE_VULKAN)
+    ImGui::Image(p.viewportTexId, sz, ImVec2(0, 0), ImVec2(1, 1));
+#else
     ImGui::Image(p.viewportTexId, sz, ImVec2(0, 1), ImVec2(1, 0));
+#endif
 
     const ImVec2 vpMin  = ImGui::GetItemRectMin();
     const ImVec2 vpMax  = ImGui::GetItemRectMax();
