@@ -373,22 +373,13 @@ now `setDepthWrite`. The point_shadow shader was already a normal vert+frag
 pair (no geometry shader); the OpenGL-only geometry-shader fan-out path
 described in the original plan never existed in this branch.
 
-### 4.7 `IBL.h` rewrite
+### 4.7 `IBL.h` rewrite — DONE (commit 4158189)
 
-**Status:** largest remaining raw-GL file in the demo. ~600 lines. Four precompute passes (equirect -> cube, irradiance convolution, specular prefilter, BRDF LUT), all using geometry-shader cubemap rendering, raw-GL framebuffers, `glTexImage2D`, and a bespoke `RawGLTexture2D` / `RawGLCubeMap` wrapper for returning the results into the engine as `ITexture`s.
-
-**Dependencies:** 4.2, 4.3, 4.4 all required.
-
-**Design:** mechanical rewrite using the cubemap texture + face-attachment RT abstractions. Each pass becomes:
-
-1. `ITextureFactory::create(desc{.type=CubeMap, .useMipmaps=...}, sampler)` — allocate the destination cubemap.
-2. `IRenderTargetFactory::create(desc{.colors=[cube, face=i]})` — one RT per face (or re-create per face using the same texture).
-3. For each face: bind RT, apply view-matrix uniform, draw unit cube.
-4. Hand the resulting `GPUTextureHandle` back to the caller.
-
-Drops `RawGLTexture2D` / `RawGLCubeMap`.
-
-**Effort:** large — ~6–10 hours for correct precompute output (IBL is notoriously finicky about filtering + coordinate handedness; the side-by-side GL vs Vulkan screenshot compare is the gate).
+Rewritten end-to-end on top of the engine abstractions: equirect HDR uploads
+through `ITextureFactory`, cubemap RTs via `isCubemap=true`, per-face render
+loop via `selectCubemapFace` + `Renderer::render()`. Drops RawGLTexture2D /
+RawGLCubeMap and the glad include. The cubemap RTs use `RenderBufferDesc`
+depth, which now has Vulkan parity (commit 9b91dc8).
 
 ### 4.8 `getImGuiTextureId()` for Vulkan — DONE (commit 8e764bb)
 
@@ -458,6 +449,9 @@ In chronological order on `main`:
 | 27 | `0e2ade2` | Phase 4.4 (partial): point_shadow shaders to SET()/push convention |
 | 28 | `c7b30ba` | RG16F + RGB16F formats (prerequisite for IBL refactor) |
 | 29 | `8f707cc` | Drop glReadPixels in EditorUI; use Renderer::readPixelRGBA8 |
+| 30 | `4158189` | Phase 4.7: rewrite IBL precompute on engine abstractions |
+| 31 | `9ebe04d` | Compile full demo on both backends (CMakeLists, ImGui init, shader locations) |
+| 32 | `9b91dc8` | Vulkan runtime fixes: endFrame frame-pending, mip transitions, RBO depth, RGB8 widening |
 
 ---
 
