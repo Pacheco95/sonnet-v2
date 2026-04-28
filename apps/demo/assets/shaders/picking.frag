@@ -1,5 +1,5 @@
 #version 460 core
-out vec4 fragColor;
+layout(location = 0) out vec4 fragColor;
 
 #ifdef VULKAN
 layout(push_constant) uniform Push {

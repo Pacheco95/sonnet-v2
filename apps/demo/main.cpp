@@ -18,6 +18,9 @@
 #include <sonnet/scene/SceneLoader.h>
 #include <sonnet/scripting/LuaScriptRuntime.h>
 #include <sonnet/ui/ImGuiLayer.h>
+#if defined(SONNET_USE_VULKAN)
+#  include <sonnet/renderer/vulkan/VkRendererBackend.h>
+#endif
 #include <sonnet/window/GLFWInputAdapter.h>
 #include <sonnet/window/GLFWWindow.h>
 #include <sonnet/world/Scene.h>
@@ -43,7 +46,25 @@ int main() {
     backend.initialize();
 
     sonnet::ui::ImGuiLayer imgui;
+#if defined(SONNET_USE_VULKAN)
+    {
+        auto *vkBackend = static_cast<sonnet::renderer::vulkan::VkRendererBackend *>(backendPtr.get());
+        const auto info = vkBackend->imGuiInitInfo();
+        imgui.init(window.handle(), sonnet::ui::VulkanInitInfo{
+            .instance       = info.instance,
+            .physicalDevice = info.physicalDevice,
+            .device         = info.device,
+            .queueFamily    = info.queueFamily,
+            .queue          = info.queue,
+            .renderPass     = info.renderPass,
+            .minImageCount  = info.minImageCount,
+            .imageCount     = info.imageCount,
+            .descriptorPool = info.descriptorPool,
+        });
+    }
+#else
     imgui.init(window.handle());
+#endif
 
     sonnet::renderer::frontend::Renderer renderer{backend};
 

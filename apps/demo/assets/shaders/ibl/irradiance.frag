@@ -1,6 +1,6 @@
 #version 460 core
-in  vec3 vLocalPos;
-out vec4 fragColor;
+layout(location = 0) in vec3 vLocalPos;
+layout(location = 0) out vec4 fragColor;
 
 layout(SET(1,0)) uniform samplerCube uEnvMap;
 

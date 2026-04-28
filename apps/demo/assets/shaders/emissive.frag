@@ -1,5 +1,5 @@
 #version 460 core
-out vec4 fragColor;
+layout(location = 0) out vec4 fragColor;
 
 // Mirrors the push-constant block in emissive.vert. Vulkan requires the
 // declared block to be identical across stages when the engine merges ranges

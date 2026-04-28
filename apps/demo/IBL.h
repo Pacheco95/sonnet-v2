@@ -84,9 +84,10 @@ inline std::array<glm::mat4, 6> captureViews() {
 }
 
 // Render a single cubemap face: bind the RT face, set viewport, clear, draw.
-// All begin/end-frame bookkeeping happens once per face — wasteful on Vulkan
-// (each face presents the swapchain) but functionally correct for a
-// startup-time precompute. A future Phase 8 could add a one-shot path.
+// Frame must be active before bindRenderTarget/setViewport/clear: the Vulkan
+// backend gates those on a pending command buffer. Wasteful on Vulkan (each
+// face presents the swapchain) but functionally correct for a startup-time
+// precompute. A future Phase 8 could add a one-shot path.
 inline void renderFace(sonnet::renderer::frontend::Renderer  &renderer,
                        sonnet::api::render::IRendererBackend &backend,
                        sonnet::core::RenderTargetHandle      rt,
@@ -97,14 +98,6 @@ inline void renderFace(sonnet::renderer::frontend::Renderer  &renderer,
                        const glm::mat4                       &proj,
                        std::vector<sonnet::api::render::RenderItem> &queue) {
     renderer.selectCubemapFace(rt, face, mipLevel);
-    renderer.bindRenderTarget(rt);
-    backend.setViewport(mipSize, mipSize);
-    backend.setDepthTest(true);
-    backend.setDepthWrite(true);
-    backend.clear({
-        .colors = {{0, glm::vec4{0.0f, 0.0f, 0.0f, 1.0f}}},
-        .depth  = 1.0f,
-    });
 
     sonnet::api::render::FrameContext ctx{
         .viewMatrix       = view,
@@ -115,6 +108,14 @@ inline void renderFace(sonnet::renderer::frontend::Renderer  &renderer,
         .deltaTime        = 0.0f,
     };
     renderer.beginFrame();
+    renderer.bindRenderTarget(rt);
+    backend.setViewport(mipSize, mipSize);
+    backend.setDepthTest(true);
+    backend.setDepthWrite(true);
+    backend.clear({
+        .colors = {{0, glm::vec4{0.0f, 0.0f, 0.0f, 1.0f}}},
+        .depth  = 1.0f,
+    });
     renderer.render(ctx, queue);
     renderer.endFrame();
 }
@@ -328,14 +329,6 @@ inline IBLMaps buildIBL(sonnet::renderer::frontend::Renderer  &renderer,
             .material    = lutMat,
             .modelMatrix = glm::mat4{1.0f},
         }};
-        renderer.bindRenderTarget(lutRT);
-        backend.setViewport(LUT_SIZE, LUT_SIZE);
-        backend.setDepthTest(false);
-        backend.setDepthWrite(false);
-        backend.clear({
-            .colors = {{0, glm::vec4{0.0f, 0.0f, 0.0f, 1.0f}}},
-            .depth  = 1.0f,
-        });
         FrameContext ctx{
             .viewMatrix       = glm::mat4{1.0f},
             .projectionMatrix = glm::mat4{1.0f},
@@ -345,6 +338,14 @@ inline IBLMaps buildIBL(sonnet::renderer::frontend::Renderer  &renderer,
             .deltaTime        = 0.0f,
         };
         renderer.beginFrame();
+        renderer.bindRenderTarget(lutRT);
+        backend.setViewport(LUT_SIZE, LUT_SIZE);
+        backend.setDepthTest(false);
+        backend.setDepthWrite(false);
+        backend.clear({
+            .colors = {{0, glm::vec4{0.0f, 0.0f, 0.0f, 1.0f}}},
+            .depth  = 1.0f,
+        });
         renderer.render(ctx, q);
         renderer.endFrame();
     }

@@ -1,7 +1,7 @@
 #version 460 core
-in vec3 vFragPos;
-in vec2 vTexCoord;
-in mat3 vTBN;
+layout(location = 0) in vec3 vFragPos;
+layout(location = 1) in vec2 vTexCoord;
+layout(location = 2) in mat3 vTBN; // 3 consecutive locations (2, 3, 4).
 
 layout(location = 0) out vec4 gAlbedoRoughness; // albedo.rgb + roughness
 layout(location = 1) out vec4 gNormalMetallic;  // world-space normal.rgb + metallic

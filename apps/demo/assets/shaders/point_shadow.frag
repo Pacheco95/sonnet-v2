@@ -1,6 +1,6 @@
 #version 460 core
-in  vec3 vFragPos;
-out vec4 fragColor;
+layout(location = 0) in  vec3 vFragPos;
+layout(location = 0) out vec4 fragColor;
 
 #ifdef VULKAN
 layout(push_constant) uniform Push {

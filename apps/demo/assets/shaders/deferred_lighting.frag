@@ -1,5 +1,5 @@
 #version 460 core
-in  vec2 vUV;
+layout(location = 0) in vec2 vUV;
 out vec4 fragColor;
 
 // ── G-buffer inputs + shadow maps + IBL — all in set=1 ────────────────────────

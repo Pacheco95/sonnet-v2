@@ -1,6 +1,6 @@
 #version 460 core
-in  vec3 vDir;
-out vec4 fragColor;
+layout(location = 0) in vec3 vDir;
+layout(location = 0) out vec4 fragColor;
 
 layout(SET(1,0)) uniform sampler2D uEnvMap; // equirectangular HDR
 layout(SET(1,1)) uniform sampler2D gDepth;  // G-buffer depth — discard pixels where geometry was drawn

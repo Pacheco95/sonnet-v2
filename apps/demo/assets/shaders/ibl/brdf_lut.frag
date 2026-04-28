@@ -1,6 +1,6 @@
 #version 460 core
-in  vec2 vTexCoord;
-out vec2 fragColor; // RG: F0 scale, F0 bias (split-sum approximation)
+layout(location = 0) in vec2 vTexCoord;
+layout(location = 0) out vec2 fragColor; // RG: F0 scale, F0 bias (split-sum approximation)
 
 const float PI = 3.14159265359;
 

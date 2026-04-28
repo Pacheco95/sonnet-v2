@@ -58,7 +58,7 @@ public:
     [[nodiscard]] VkRenderPass  renderPass()  const { return m_renderPass; }
     [[nodiscard]] VkFramebuffer framebuffer() const;
     [[nodiscard]] std::uint32_t colorCount()  const { return static_cast<std::uint32_t>(m_colors.size()); }
-    [[nodiscard]] bool          hasDepth()    const { return m_depth != nullptr; }
+    [[nodiscard]] bool          hasDepth()    const { return m_depth != nullptr || m_hasRenderbufferDepth; }
 
 private:
     void buildRenderPass();
@@ -75,6 +75,7 @@ private:
 
     // ── Cubemap path ───────────────────────────────────────────────────────
     bool                          m_isCubemap = false;
+    bool                          m_hasRenderbufferDepth = false; // cubemap RT only
     std::uint32_t                 m_mipLevels = 1;
     // Indexed as [mip * 6 + face]. Each VkFramebuffer points at one face/mip
     // via its single-layer single-mip VkImageView. Size = mipLevels × 6 when
@@ -82,6 +83,13 @@ private:
     std::vector<VkFramebuffer>    m_faceFramebuffers;
     std::vector<VkImageView>      m_faceColorViews;
     std::vector<VkImageView>      m_faceDepthViews; // only when m_depth is a cubemap
+
+    // Per-mip 2D depth images for cubemap RTs that requested a non-sampled
+    // RenderBufferDesc depth attachment. Shared across the 6 faces of the
+    // same mip. Size = mipLevels when used, empty otherwise.
+    std::vector<VkImage>          m_renderbufferDepthImages;
+    std::vector<VmaAllocation>    m_renderbufferDepthAllocs;
+    std::vector<VkImageView>      m_renderbufferDepthViews;
 
     mutable std::uint32_t         m_activeFace = 0;
     mutable std::uint32_t         m_activeMip  = 0;

@@ -30,9 +30,10 @@ layout(push_constant) uniform Push {
 uniform mat4 uModel;
 #endif
 
-out vec3 vFragPos;  // world-space position
-out vec2 vTexCoord;
-out mat3 vTBN;      // TBN in world space (for normal mapping)
+layout(location = 0) out vec3 vFragPos;  // world-space position
+layout(location = 1) out vec2 vTexCoord;
+// mat3 spans 3 consecutive locations under Vulkan's strict location rules.
+layout(location = 2) out mat3 vTBN;      // TBN in world space (for normal mapping)
 
 void main() {
     vec4 worldPos  = uModel * vec4(aPosition, 1.0);

@@ -9,7 +9,7 @@ layout(std140, SET(0,0)) uniform CameraUBO {
     mat4 uInvProjection;
 };
 
-out vec3 vDir;
+layout(location = 0) out vec3 vDir;
 
 void main() {
     // Clip at depth=1.0 so the sky renders behind all geometry.

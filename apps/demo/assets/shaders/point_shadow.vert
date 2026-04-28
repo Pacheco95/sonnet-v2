@@ -20,7 +20,7 @@ layout(push_constant) uniform Push { mat4 uModel; } pc;
 uniform mat4 uModel;
 #endif
 
-out vec3 vFragPos;
+layout(location = 0) out vec3 vFragPos;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPosition, 1.0);

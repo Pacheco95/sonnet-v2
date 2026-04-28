@@ -1,6 +1,6 @@
 #version 460 core
-in  vec2 vUV;
-out vec4 fragColor; // R = AO factor [0,1]
+layout(location = 0) in vec2 vUV;
+layout(location = 0) out vec4 fragColor; // R = AO factor [0,1]
 
 layout(SET(1,0)) uniform sampler2D uNormalMap; // view-space normals from pre-pass
 layout(SET(1,1)) uniform sampler2D uDepthMap;  // depth texture from pre-pass

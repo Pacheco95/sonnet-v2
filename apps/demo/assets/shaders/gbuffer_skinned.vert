@@ -39,9 +39,9 @@ layout(push_constant) uniform Push {
 uniform mat4 uBoneMatrices[MAX_BONES];
 #endif
 
-out vec3 vFragPos;   // world-space position
-out vec2 vTexCoord;
-out mat3 vTBN;       // TBN in world space (for normal mapping)
+layout(location = 0) out vec3 vFragPos;   // world-space position
+layout(location = 1) out vec2 vTexCoord;
+layout(location = 2) out mat3 vTBN;       // 3 consecutive locations (2, 3, 4).
 
 void main() {
     // Blend up to 4 bone transforms weighted by the per-vertex weights.

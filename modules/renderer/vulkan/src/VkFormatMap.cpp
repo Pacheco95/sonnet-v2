@@ -19,7 +19,11 @@ VkFormat toVkFormat(api::render::TextureFormat fmt, api::render::ColorSpace colo
         // Most consumer GPUs widen 3-channel to 4 anyway, so map RGB16F to
         // RGBA16F. The alpha channel is wasted but storage-cost neutral.
         case F::RGB16F:  return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case F::Depth24: return VK_FORMAT_D24_UNORM_S8_UINT;
+        // D32_SFLOAT is mandatory-supported in core Vulkan; D24_UNORM_S8_UINT
+        // is optional and absent on Apple Silicon's MoltenVK. The engine
+        // doesn't use stencil, so a 32-bit depth-only format is the right
+        // choice. The OpenGL side keeps GL_DEPTH_COMPONENT24 which is fine.
+        case F::Depth24: return VK_FORMAT_D32_SFLOAT;
     }
     throw VulkanError("toVkFormat: unknown TextureFormat");
 }
